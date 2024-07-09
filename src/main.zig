@@ -22,5 +22,19 @@ pub fn main() !void {
     const file_contents = try file.readToEndAlloc(allocator, 2048);
     defer (allocator.free(file_contents));
 
+    // TODO: DO the dissasembly
+    //
+    //
+    //
+
     std.log.debug("{b}", .{file_contents});
+
+    // Here is how to write to a file when we have dissasembled code
+    const output_file = try std.fs.cwd().createFile(
+        "example.asm",
+        .{ .read = true },
+    );
+    defer (output_file.close());
+    try output_file.writeAll("bits 16\n\n");
+    try output_file.writeAll("mov cx, bx");
 }
