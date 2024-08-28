@@ -26,11 +26,27 @@ pub fn readFile(allocator: *const std.mem.Allocator, file_path: []const u8) ![]u
 // We are going to go one opcode at a time and let an method emerge rather than
 // trying to solve everything all at once. Starting with register to register MOV
 // only. Then will grow from here
-pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
-    // [x, x, x, x, x, x, x] [x, x, x, x, x, x, x, x]
-    // [OPCODE         D  W] [MOD   REG      R/M    ]
 
-    // MOV
+// [x, x, x, x, x, x, x] [x, x, x, x, x, x, x, x]
+// [OPCODE         D  W] [MOD   REG      R/M    ]
+// MOD (MODE):
+//      indicates whether on of the operands is in memory or whether both are in registers
+//      case: 00
+//          memory mode: no displacement*
+//      case: 01
+//          memory mode: 8-bit displacement
+//      case: 10
+//          memory mode: 16-bit displacement
+//      case: 11
+//          register mode: no displacement
+// REG (REGISTER):
+//      identifies a register than is on of instruction operands.
+// R/M (REGISTER/MEMORY):
+//      if(MOD=11):
+//          second register operant
+//      else:
+//          how the effective memory address of memory operand is to be calculated
+pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
     const first_byte = contents[0];
     const second_byte = contents[1];
 
@@ -50,25 +66,21 @@ pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
     std.log.debug("R/M check: {}", .{rm_bits == 0b001});
 
     // Assume for now only dealing with Register to Register MOV (100010xx)
+    var i_list = std.ArrayList(u8).init(allocator.*);
+
     if (opcode_bits == 0b100010) {
-        const opcode = "MOV";
-
-        // Calculate the total length of the concatenated string
-        const res = opcode ++ " ";
-
-        // Allocate memory for the concatenated string
-        var concatenated = try allocator.alloc(u8, res.len);
-        errdefer allocator.free(concatenated);
-
-        // Copy the first string into the allocated memory
-        std.mem.copyForwards(u8, concatenated[0..res.len], res);
-
-        // Return the concatenated string
-        return concatenated;
+        try i_list.appendSlice("MOV ");
+        if (mod_bits == 0b11) {
+            try i_list.appendSlice("Ax, ");
+            try i_list.appendSlice("Bx");
+        }
+    } else {
+        std.log.err("expected 100010, got {b}", .{first_byte & opcode_bits});
+        return error.UnknownOPCode;
     }
 
-    std.log.err("expected 100010, got {b}", .{first_byte & opcode_bits});
-    return error.UnknownOPCode;
+    // Return the concatenated string
+    return i_list.items;
 }
 
 pub fn writeAsmToFile() !void {}
