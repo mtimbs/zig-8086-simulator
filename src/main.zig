@@ -1,4 +1,5 @@
 const std = @import("std");
+const decoder = @import("decoding.zig");
 
 pub fn readFile(allocator: *const std.mem.Allocator, file_path: []const u8) ![]u8 {
     // Open the file
@@ -64,15 +65,22 @@ pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
     std.log.debug("REG check: {}", .{reg_bits == 0b011});
     std.log.debug("R/M: {b}", .{rm_bits});
     std.log.debug("R/M check: {}", .{rm_bits == 0b001});
+    std.log.debug("REG + W: {b}", .{(reg_bits << 1) + w_bit});
 
     // Assume for now only dealing with Register to Register MOV (100010xx)
     var i_list = std.ArrayList(u8).init(allocator.*);
 
     if (opcode_bits == 0b100010) {
-        try i_list.appendSlice("MOV ");
+        // MOV [destination], [src]
+        try i_list.appendSlice("mov");
+        try i_list.appendSlice(" ");
         if (mod_bits == 0b11) {
-            try i_list.appendSlice("Ax, ");
-            try i_list.appendSlice("Bx");
+            const destination = if (d_bit == 0b1) try decoder.reg_decoder(reg_bits, w_bit) else try decoder.rm_decoder(mod_bits, rm_bits, w_bit);
+            const source = if (d_bit == 0b0) try decoder.reg_decoder(reg_bits, w_bit) else try decoder.rm_decoder(mod_bits, rm_bits, w_bit);
+            try i_list.appendSlice(destination);
+            try i_list.appendSlice(", ");
+            try i_list.appendSlice(source);
+            try i_list.appendSlice("\n");
         }
     } else {
         std.log.err("expected 100010, got {b}", .{first_byte & opcode_bits});
@@ -83,7 +91,15 @@ pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
     return i_list.items;
 }
 
-pub fn writeAsmToFile() !void {}
+pub fn writeAsmToFile(instructions: []u8) !void {
+    const output_file = try std.fs.cwd().createFile(
+        "output.asm",
+        .{ .read = true },
+    );
+    defer (output_file.close());
+    try output_file.writeAll("bits 16\n\n");
+    try output_file.writeAll(instructions);
+}
 
 pub fn main() !void {
     // Allocate a fixed amount of data. We're doing 1 MB.
@@ -101,13 +117,5 @@ pub fn main() !void {
     std.log.debug("File contents:\n{b}\n", .{file_contents});
     const dissasembled_asm = try dissassemble(&allocator, file_contents);
     std.log.debug("Output ASM:\n{s}\n", .{dissasembled_asm});
-
-    // Here is how to write to a file when we have dissasembled code
-    // const output_file = try std.fs.cwd().createFile(
-    //     "example.asm",
-    //     .{ .read = true },
-    // );
-    // defer (output_file.close());
-    // try output_file.writeAll("bits 16\n\n");
-    // try output_file.writeAll("mov cx, bx");
+    try writeAsmToFile(dissasembled_asm);
 }
