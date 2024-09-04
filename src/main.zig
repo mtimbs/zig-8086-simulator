@@ -1,5 +1,6 @@
 const std = @import("std");
 const decoder = @import("decoding.zig");
+const parse_args = @import("parse_args.zig").parse_args;
 
 pub fn readFile(allocator: *const std.mem.Allocator, file_path: []const u8) ![]u8 {
     // Open the file
@@ -108,14 +109,19 @@ pub fn main() !void {
     // Initialize with a FixedBufferAllocator
     var fba = std.heap.FixedBufferAllocator.init(&fixed_buffer);
     // Take the allocator so we can allocate some data
-    const allocator = fba.allocator();
+    const fb_allocator = fba.allocator();
+
+    const args = try parse_args();
+    std.log.debug("Parsed Args: \ninput: {s}\noutput: {s}\n", .{ args.input_file, args.output_file });
 
     // Example usage
-    const file_contents = try readFile(&allocator, "./asm_examples/single_register_mov");
-    defer allocator.free(file_contents);
+    const file_contents = try readFile(&fb_allocator, "./asm_examples/single_register_mov");
+    defer fb_allocator.free(file_contents);
 
     std.log.debug("File contents:\n{b}\n", .{file_contents});
-    const dissasembled_asm = try dissassemble(&allocator, file_contents);
+    const dissasembled_asm = try dissassemble(&fb_allocator, file_contents);
+    defer fb_allocator.free(dissasembled_asm);
+
     std.log.debug("Output ASM:\n{s}\n", .{dissasembled_asm});
     try writeAsmToFile(dissasembled_asm);
 }
