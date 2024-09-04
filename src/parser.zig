@@ -4,7 +4,7 @@ const ParsedArgs = struct {
     output_file: []const u8,
 };
 
-pub fn parse_args() !ParsedArgs {
+pub fn parseArgs() !ParsedArgs {
     const args = std.os.argv;
     var result = ParsedArgs{
         .input_file = undefined,
@@ -31,4 +31,37 @@ pub fn parse_args() !ParsedArgs {
     }
 
     return result;
+}
+
+pub fn readFile(allocator: *const std.mem.Allocator, file_path: []const u8) ![]u8 {
+    // Open the file
+    const file = try std.fs.cwd().openFile(file_path, .{});
+    defer file.close();
+
+    // Get the size of the file
+    const file_size = try file.getEndPos();
+
+    // Allocate memory for the file contents
+    const buffer = try allocator.alloc(u8, file_size);
+    errdefer allocator.free(buffer);
+
+    // Read the entire file into the buffer
+    const bytes_read = try file.readAll(buffer);
+    if (bytes_read != file_size) {
+        // If we didn't read the whole file, return an error
+        return error.FileReadError;
+    }
+
+    // Return the buffer containing the file contents
+    return buffer;
+}
+
+pub fn writeAsmToFile(file_path: []const u8, instructions: []u8) !void {
+    const output_file = try std.fs.cwd().createFile(
+        file_path,
+        .{ .read = true },
+    );
+    defer (output_file.close());
+    try output_file.writeAll("bits 16\n\n");
+    try output_file.writeAll(instructions);
 }
