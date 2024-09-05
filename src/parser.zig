@@ -30,6 +30,14 @@ pub fn parseArgs() !ParsedArgs {
         }
     }
 
+    if (result.input_file.len == 0) {
+        return error.MissingInputFileValue;
+    }
+
+    if (result.output_file.len == 0) {
+        return error.MissingOutputFileValue;
+    }
+
     return result;
 }
 
