@@ -17,3 +17,10 @@ Goal:
 
 ## Aknowledgements
 I am building this as I am following along with the course by C. Muratori at https://www.computerenhance.com
+
+
+## TODO
+- [ ] handle dynamically parsing number of bytes (e.g single byte instructions, hi/lo displacement, multiple instructions etc)
+- [ ] change diff to work on the machine code not .asm files (handles comments and signed integers)
+- [ ] handle movs from more_movs.asm
+- [ ] handle challenge_mov.asm

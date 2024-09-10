@@ -6,6 +6,9 @@ mkdir -p output
 INPUT="asm_examples/single_register_mov.asm"
 OUTPUT="output/single_register_mov.asm"
 
+# INPUT="asm_examples/more_movs.asm"
+# OUTPUT="output/more_movs.asm"
+
 echo "Building ${INPUT}..."
 
 nasm ${INPUT}
