@@ -8,16 +8,42 @@ pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
     while (i < num_bytes) : (i += 1) {
         std.log.debug("------------------------------", .{});
         const first_byte = contents[i];
+        std.log.debug("byte under inspection: {b}", .{first_byte});
 
         if (num_bytes < i + 1) {
             // this is just a placeholder until I handle this legitimate case
             // -- at the moment I am only dealing with non-single byte instructions
-            return error.PlaceHolderError;
+            return error.OutOfBytesError;
         }
 
         if (first_byte >> 4 == 0b1011) {
             // This is an Immediate to Register MOV
-            return error.PlaceHolderError;
+            const data_one = contents[i + 1];
+            const w_bit = (first_byte >> 3) & 1;
+            const reg_bits = first_byte & 3;
+            std.log.debug("data: {b}", .{data_one});
+            std.log.debug("W: {b}", .{w_bit});
+            std.log.debug("reg: {b}", .{reg_bits});
+
+            const reg = try regDecoder(reg_bits, w_bit);
+
+            if (w_bit == 0b1 and num_bytes > i + 2) {
+                // TODO: somehow convert the [2]u8 to a i16
+                const imm_bits = [2]u8{ contents[i + 1], contents[i + 2] };
+                const immediate: u16 = std.mem.readInt(u16, &imm_bits, .big);
+                std.log.debug("immediate: {d}", .{immediate});
+                const instruction = interpolate("mov {s}, {d}\n", .{ reg, immediate });
+                try i_list.appendSlice(instruction);
+            } else {
+                // TODO: somehow convert the [1]u8 to a i16
+                const imm_bits = [2]u8{ 0b00000000, contents[i + 1] };
+                const immediate: u16 = std.mem.readInt(u16, &imm_bits, .big);
+                std.log.debug("immediate: {d}", .{immediate});
+                const instruction = interpolate("mov {s}, {d}\n", .{ reg, immediate });
+                try i_list.appendSlice(instruction);
+            }
+
+            i += (1 + w_bit);
         }
 
         // Register/Memory to/from register
@@ -39,8 +65,6 @@ pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             std.log.debug("REG + W: {b}", .{(reg_bits << 1) + w_bit});
 
             // MOV [destination], [src]
-            try i_list.appendSlice("mov");
-            try i_list.appendSlice(" ");
             const reg = try regDecoder(reg_bits, w_bit);
             const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
 
@@ -49,10 +73,10 @@ pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
 
             const destination = if (d_bit == 0b1) reg else rm.register;
             const source = if (d_bit == 0b0) reg else rm.register;
-            try i_list.appendSlice(destination);
-            try i_list.appendSlice(", ");
-            try i_list.appendSlice(source);
-            try i_list.appendSlice("\n");
+            const instruction = interpolate("mov {s}, {s}\n", .{ destination, source });
+            try i_list.appendSlice(instruction);
+
+            i += 1;
         }
     }
 
@@ -113,6 +137,14 @@ fn rmDecoder(mod: u8, rm: u8, w: u8) !EffectiveAddress {
     }
 
     return error.UnrecognisedRegisterMemoryFieldEncoding;
+}
+
+fn interpolate(comptime fmt: []const u8, args: anytype) []const u8 {
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const writer = fbs.writer();
+    writer.print(fmt, args) catch unreachable; // Assuming print won't fail for simplicity
+    return fbs.getWritten();
 }
 
 test "regDecoder" {
