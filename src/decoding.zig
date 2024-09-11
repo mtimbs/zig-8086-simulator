@@ -37,7 +37,7 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
                 try instruction_stack.appendSlice(instruction);
             } else {
                 // To convert to a u16 we need a [2]u8 so we just zero pad to align the bytes
-                const immediate = bytes_to_u16(&[2]u8{ 0b0, contents[i + 1] });
+                const immediate = bytes_to_u16(&[2]u8{ contents[i + 1], 0b0 });
                 std.log.debug("immediate: {d}", .{immediate});
                 std.log.debug("reg: {s}", .{reg});
                 const instruction = try interpolate(allocator, "mov {s}, {d}\n", .{ reg, immediate });
@@ -93,16 +93,24 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
 }
 
 test "disassemble" {
+    // Register-to-register
     const allocator = std.testing.allocator;
     const bytes = [_]u8{ 0b10001001, 0b11011110 };
     const res = try disassemble(&allocator, @constCast(bytes[0..]));
     try std.testing.expectEqualSlices(u8, "mov si, bx\n", res);
     allocator.free(res);
 
+    // 8-bit immediate-to-register (unsigned wrap/overflow)
     const bytes_2 = [_]u8{ 0b10110101, 0b11110100 };
     const res_2 = try disassemble(&allocator, @constCast(bytes_2[0..]));
     try std.testing.expectEqualSlices(u8, "mov ch, 244\n", res_2);
     allocator.free(res_2);
+
+    // 16-bit immediate-to-register (unsigned wrap/overflow)
+    // const bytes_3 = [_]u8{ 0b10111001, 0b00001100, 0b0000000 };
+    // const res_3 = try disassemble(&allocator, @constCast(bytes_3[0..]));
+    // try std.testing.expectEqualSlices(u8, "mov cx, 12\n", res_3);
+    // allocator.free(res_3);
 }
 
 fn regDecoder(reg: u8, w: u8) ![]const u8 {
@@ -183,13 +191,13 @@ test "rmDecoder" {
 }
 
 fn bytes_to_u16(bytes: *const [2]u8) u16 {
-    return std.mem.readInt(u16, bytes, .big);
+    return std.mem.readInt(u16, bytes, .little);
 }
 
 test "bytes_to_u16" {
-    try std.testing.expectEqual(12, bytes_to_u16(&[_]u8{ 0b0, 0b1100 }));
-    try std.testing.expectEqual(244, bytes_to_u16(&[_]u8{ 0b0, 0b11110100 }));
-    try std.testing.expectEqual(38128, bytes_to_u16(&[_]u8{ 0b10010100, 0b11110000 }));
+    try std.testing.expectEqual(12, bytes_to_u16(&[_]u8{ 0b1100, 0b0 }));
+    try std.testing.expectEqual(244, bytes_to_u16(&[_]u8{ 0b11110100, 0b0 }));
+    try std.testing.expectEqual(3948, bytes_to_u16(&[_]u8{ 0b1101100, 0b1111 }));
 }
 
 fn interpolate(
