@@ -19,9 +19,9 @@ pub fn main() !void {
     defer fb_allocator.free(file_contents);
 
     std.log.debug("File contents:\n{b}\n", .{file_contents});
-    const dissasembled_asm = try decoder.dissassemble(&fb_allocator, file_contents);
-    defer fb_allocator.free(dissasembled_asm);
+    const disasembled_asm = try decoder.disassemble(&fb_allocator, file_contents);
+    defer fb_allocator.free(disasembled_asm);
 
-    std.log.debug("Output ASM:\n{s}\n", .{dissasembled_asm});
-    try parser.writeAsmToFile(args.output_file, dissasembled_asm);
+    std.log.debug("Output ASM:\n{s}\n", .{disasembled_asm});
+    try parser.writeAsmToFile(args.output_file, disasembled_asm);
 }
