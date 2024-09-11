@@ -66,9 +66,7 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             std.log.debug("W: {b}", .{w_bit});
             std.log.debug("MOD: {b}", .{mod_bits});
             std.log.debug("REG: {b}", .{reg_bits});
-            std.log.debug("REG check: {}", .{reg_bits == 0b011});
             std.log.debug("R/M: {b}", .{rm_bits});
-            std.log.debug("R/M check: {}", .{rm_bits == 0b001});
             std.log.debug("REG + W: {b}", .{(reg_bits << 1) + w_bit});
 
             // MOV [destination], [src]
@@ -80,9 +78,41 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
 
             const destination = if (d_bit == 0b1) reg else rm.register;
             const source = if (d_bit == 0b0) reg else rm.register;
-            const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
-            defer allocator.free(instruction);
-            try instruction_stack.appendSlice(instruction);
+            if (rm.displacement == .None) {
+                const instruction = try interpolate(allocator, "mov {s}{s}{s}, {s}{s}{s}\n", .{ if (destination.len > 2) "[" else "", destination, if (destination.len > 2) "]" else "", if (source.len > 2) "[" else "", source, if (source.len > 2) "]" else "" });
+                defer allocator.free(instruction);
+                try instruction_stack.appendSlice(instruction);
+            } else if (rm.displacement == .Low) {
+                if (num_bytes >= i + 2) {
+                    const d8_value = bytes_to_u16(&[_]u8{ contents[i + 2], 0b0 });
+                    if (d8_value == 0) {
+                        const instruction = try interpolate(allocator, "mov {s}, [{s}]\n", .{ destination, source });
+                        defer allocator.free(instruction);
+                        try instruction_stack.appendSlice(instruction);
+                    } else {
+                        const instruction = try interpolate(allocator, "mov {s}, [{s} + {d}]\n", .{ destination, source, d8_value });
+                        defer allocator.free(instruction);
+                        try instruction_stack.appendSlice(instruction);
+                    }
+                } else {
+                    return error.InsufficientBytesForDisplacementLow;
+                }
+            } else {
+                if (num_bytes >= i + 3) {
+                    const d16_value = bytes_to_u16(&[_]u8{ contents[i + 2], contents[i + 3] });
+                    if (d16_value == 0) {
+                        const instruction = try interpolate(allocator, "mov {s}, [{s}]\n", .{ destination, source });
+                        defer allocator.free(instruction);
+                        try instruction_stack.appendSlice(instruction);
+                    } else {
+                        const instruction = try interpolate(allocator, "mov {s}, [{s} + {d}]\n", .{ destination, source, d16_value });
+                        defer allocator.free(instruction);
+                        try instruction_stack.appendSlice(instruction);
+                    }
+                } else {
+                    return error.InsufficientBytesForDisplacementHigh;
+                }
+            }
 
             i += 1;
         }
@@ -107,10 +137,16 @@ test "disassemble" {
     allocator.free(res_2);
 
     // 16-bit immediate-to-register (unsigned wrap/overflow)
-    // const bytes_3 = [_]u8{ 0b10111001, 0b00001100, 0b0000000 };
-    // const res_3 = try disassemble(&allocator, @constCast(bytes_3[0..]));
-    // try std.testing.expectEqualSlices(u8, "mov cx, 12\n", res_3);
-    // allocator.free(res_3);
+    const bytes_3 = [_]u8{ 0b10111001, 0b00001100, 0b0000000 };
+    const res_3 = try disassemble(&allocator, @constCast(bytes_3[0..]));
+    try std.testing.expectEqualSlices(u8, "mov cx, 12\n", res_3);
+    allocator.free(res_3);
+
+    // Source address calculation
+    const bytes_4 = [_]u8{ 0b10001010, 0b0 };
+    const res_4 = try disassemble(&allocator, @constCast(bytes_4[0..]));
+    try std.testing.expectEqualSlices(u8, "mov al, [bx + si]\n", res_4);
+    allocator.free(res_4);
 }
 
 fn regDecoder(reg: u8, w: u8) ![]const u8 {
@@ -156,16 +192,16 @@ fn rmDecoder(mod: u8, rm: u8, w: u8) !EffectiveAddress {
         const register = try regDecoder(rm, w);
         return EffectiveAddress{ .register = register, .displacement = .None };
     } else {
-        const register = try switch (rm << 1) {
-            0b000 => "[bx + si]",
-            0b001 => "[bx + di]",
-            0b010 => "[bp + si]",
-            0b011 => "[bp + di]",
+        const register = try switch (rm) {
+            0b000 => "bx + si",
+            0b001 => "bx + di",
+            0b010 => "bp + si",
+            0b011 => "bp + di",
             0b100 => "si",
             0b101 => "di",
             0b110 => "bp",
             0b111 => "bx",
-            else => error.UnrecognisedRegisterFieldEncoding,
+            else => error.UnrecognisedRMFieldEncoding,
         };
 
         const displacement = try switch (mod) {
