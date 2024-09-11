@@ -3,12 +3,12 @@ const std = @import("std");
 pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
     var i: u8 = 0;
     // TODO: Use some kind of writer here or something to just do string formatting
-    var i_list = std.ArrayList(u8).init(allocator.*);
+    var instruction_stack = std.ArrayList(u8).init(allocator.*);
     const num_bytes = contents.len;
     while (i < num_bytes) : (i += 1) {
         std.log.debug("------------------------------", .{});
-        const first_byte = contents[i];
-        std.log.debug("byte under inspection: {b}", .{first_byte});
+        const current_byte = contents[i];
+        std.log.debug("byte under inspection: {b}", .{current_byte});
 
         if (num_bytes < i + 1) {
             // this is just a placeholder until I handle this legitimate case
@@ -16,45 +16,49 @@ pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             return error.OutOfBytesError;
         }
 
-        if (first_byte >> 4 == 0b1011) {
+        if (current_byte >> 4 == 0b1011) {
             // This is an Immediate to Register MOV
             const data_one = contents[i + 1];
-            const w_bit = (first_byte >> 3) & 1;
-            const reg_bits = first_byte & 3;
+            const w_bit = (current_byte >> 3) & 1;
+            const reg_bits = current_byte & 3;
             std.log.debug("data: {b}", .{data_one});
             std.log.debug("W: {b}", .{w_bit});
             std.log.debug("reg: {b}", .{reg_bits});
 
             const reg = try regDecoder(reg_bits, w_bit);
 
-            if (w_bit == 0b1 and num_bytes > i + 2) {
-                // TODO: somehow convert the [2]u8 to a i16
+            if (w_bit == 0b1 and num_bytes >= i + 2) {
+                // Convert a [2]u8 to a u16
                 const imm_bits = [2]u8{ contents[i + 1], contents[i + 2] };
                 const immediate: u16 = std.mem.readInt(u16, &imm_bits, .big);
                 std.log.debug("immediate: {d}", .{immediate});
-                const instruction = interpolate("mov {s}, {d}\n", .{ reg, immediate });
-                try i_list.appendSlice(instruction);
+                std.log.debug("reg: {s}", .{reg});
+                try addInstruction("mov {s}, {d}\n", .{ reg, immediate }, &instruction_stack);
             } else {
-                // TODO: somehow convert the [1]u8 to a i16
+                // To convert to a u16 we need a [2]u8 so we just zero pad to align the bytes
                 const imm_bits = [2]u8{ 0b00000000, contents[i + 1] };
                 const immediate: u16 = std.mem.readInt(u16, &imm_bits, .big);
                 std.log.debug("immediate: {d}", .{immediate});
-                const instruction = interpolate("mov {s}, {d}\n", .{ reg, immediate });
-                try i_list.appendSlice(instruction);
+                std.log.debug("reg: {s}", .{reg});
+                try addInstruction("mov {s}, {d}\n", .{ reg, immediate }, &instruction_stack);
             }
 
+            // If the w_bit is 0 we only had a single byte displacement so only need to skip the next byte.
+            // If the w_bit is 1 we had a 2 byte displacement so we increment by two.
+            // Zig can handle int/binary addition. e.g. 1 + 0b1 is 2.
             i += (1 + w_bit);
         }
 
         // Register/Memory to/from register
-        if (first_byte >> 2 == 0b100010) {
-            const second_byte = contents[i + 1];
-            const d_bit = first_byte >> 1 & 1;
-            const w_bit = first_byte & 1;
-            const mod_bits = second_byte >> 6;
-            const reg_bits = second_byte >> 3 & ((1 << 3) - 1);
-            const rm_bits = second_byte & ((1 << 3) - 1);
-            std.log.debug("OPCODE: {b}", .{first_byte >> 2});
+        if (current_byte >> 2 == 0b100010 and num_bytes > i) {
+            const next_byte = contents[i + 1];
+            const d_bit = current_byte >> 1 & 1;
+            const w_bit = current_byte & 1;
+            const mod_bits = next_byte >> 6;
+            const reg_bits = next_byte >> 3 & ((1 << 3) - 1);
+            const rm_bits = next_byte & ((1 << 3) - 1);
+
+            std.log.debug("OPCODE: {b}", .{current_byte >> 2});
             std.log.debug("D: {b}", .{d_bit});
             std.log.debug("W: {b}", .{w_bit});
             std.log.debug("MOD: {b}", .{mod_bits});
@@ -73,15 +77,14 @@ pub fn dissassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
 
             const destination = if (d_bit == 0b1) reg else rm.register;
             const source = if (d_bit == 0b0) reg else rm.register;
-            const instruction = interpolate("mov {s}, {s}\n", .{ destination, source });
-            try i_list.appendSlice(instruction);
+            try addInstruction("mov {s}, {s}\n", .{ destination, source }, &instruction_stack);
 
             i += 1;
         }
     }
 
     // Return the concatenated string
-    return i_list.items;
+    return instruction_stack.items;
 }
 
 fn regDecoder(reg: u8, w: u8) ![]const u8 {
@@ -139,12 +142,18 @@ fn rmDecoder(mod: u8, rm: u8, w: u8) !EffectiveAddress {
     return error.UnrecognisedRegisterMemoryFieldEncoding;
 }
 
-fn interpolate(comptime fmt: []const u8, args: anytype) []const u8 {
+fn addInstruction(
+    comptime fmt: []const u8,
+    args: anytype,
+    stack: *std.ArrayList(u8),
+) !void {
     var buf: [1024]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
     writer.print(fmt, args) catch unreachable; // Assuming print won't fail for simplicity
-    return fbs.getWritten();
+    const str = fbs.getWritten();
+    std.log.debug("Adding instruction to stack: {s}", .{str});
+    try stack.appendSlice(str);
 }
 
 test "regDecoder" {
