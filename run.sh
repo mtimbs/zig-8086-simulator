@@ -19,8 +19,16 @@ zig run src/main.zig -- --input-file ${INPUT%????} --output-file ${OUTPUT}
 
 echo "Decoded machine code to assembly. Output destination: ${OUTPUT}"
 
+# We are going to compile the output asm back to machine code and diff that.
+# We need to do this because immediates are unsigned. So for example, the following
+# two assembly instructions produce the same machine code. We have no way of knowing
+# which instruction was the source for the code.
+# mov cx, -12
+# mov cx, 244
+nasm ${OUTPUT}
+
 echo "Checking diff INPUT/OUTPUT....."
 
-diff $INPUT $OUTPUT
+diff ${INPUT%????} ${OUTPUT%????}
 
 echo "✅ Valid decoding "

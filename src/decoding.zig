@@ -20,7 +20,7 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             // This is an Immediate to Register MOV
             const data_one = contents[i + 1];
             const w_bit = (current_byte >> 3) & 1;
-            const reg_bits = current_byte & 3;
+            const reg_bits = current_byte & ((1 << 3) - 1);
             std.log.debug("data: {b}", .{data_one});
             std.log.debug("W: {b}", .{w_bit});
             std.log.debug("reg: {b}", .{reg_bits});
@@ -33,14 +33,15 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
                 std.log.debug("immediate: {d}", .{immediate});
                 std.log.debug("reg: {s}", .{reg});
                 const instruction = try interpolate(allocator, "mov {s}, {d}\n", .{ reg, immediate });
+                defer allocator.free(instruction);
                 try instruction_stack.appendSlice(instruction);
             } else {
                 // To convert to a u16 we need a [2]u8 so we just zero pad to align the bytes
-                // const immediate = bytes_to_u16(&[2]u8{ 0b00000000, contents[i + 1] });
-                const immediate: u16 = 244;
+                const immediate = bytes_to_u16(&[2]u8{ 0b0, contents[i + 1] });
                 std.log.debug("immediate: {d}", .{immediate});
                 std.log.debug("reg: {s}", .{reg});
-                const instruction = try interpolate(allocator, "mov {s}, {d}\n", .{ reg, 244 });
+                const instruction = try interpolate(allocator, "mov {s}, {d}\n", .{ reg, immediate });
+                defer allocator.free(instruction);
                 std.log.debug("instruction: {s}", .{instruction});
                 try instruction_stack.appendSlice(instruction);
             }
@@ -80,6 +81,7 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             const destination = if (d_bit == 0b1) reg else rm.register;
             const source = if (d_bit == 0b0) reg else rm.register;
             const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
+            defer allocator.free(instruction);
             try instruction_stack.appendSlice(instruction);
 
             i += 1;
@@ -88,6 +90,19 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
 
     // Return the concatenated string
     return instruction_stack.toOwnedSlice();
+}
+
+test "disassemble" {
+    const allocator = std.testing.allocator;
+    const bytes = [_]u8{ 0b10001001, 0b11011110 };
+    const res = try disassemble(&allocator, @constCast(bytes[0..]));
+    try std.testing.expectEqualSlices(u8, "mov si, bx\n", res);
+    allocator.free(res);
+
+    const bytes_2 = [_]u8{ 0b10110101, 0b11110100 };
+    const res_2 = try disassemble(&allocator, @constCast(bytes_2[0..]));
+    try std.testing.expectEqualSlices(u8, "mov ch, 244\n", res_2);
+    allocator.free(res_2);
 }
 
 fn regDecoder(reg: u8, w: u8) ![]const u8 {
