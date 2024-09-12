@@ -60,6 +60,8 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             const mod_bits = next_byte >> 6;
             const reg_bits = next_byte >> 3 & ((1 << 3) - 1);
             const rm_bits = next_byte & ((1 << 3) - 1);
+            const reg = try regDecoder(reg_bits, w_bit);
+            const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
 
             std.log.debug("OPCODE: {b}", .{current_byte >> 2});
             std.log.debug("D: {b}", .{d_bit});
@@ -68,17 +70,14 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             std.log.debug("REG: {b}", .{reg_bits});
             std.log.debug("R/M: {b}", .{rm_bits});
             std.log.debug("REG + W: {b}", .{(reg_bits << 1) + w_bit});
-
-            // MOV [destination], [src]
-            const reg = try regDecoder(reg_bits, w_bit);
-            const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
-
             std.log.debug("Reg: {s}", .{reg});
             std.log.debug("R/M: {s}", .{rm.register});
 
             const destination = if (d_bit == 0b1) reg else rm.register;
             const source = if (d_bit == 0b0) reg else rm.register;
             if (rm.displacement == .None) {
+                // Note: the "[" "]" are not just for len > 2. It represents a dereference of the memory address.
+                // This is everything listed in table 4-10 (page 162). Just need a way to include displacement checks
                 const instruction = try interpolate(allocator, "mov {s}{s}{s}, {s}{s}{s}\n", .{ if (destination.len > 2) "[" else "", destination, if (destination.len > 2) "]" else "", if (source.len > 2) "[" else "", source, if (source.len > 2) "]" else "" });
                 defer allocator.free(instruction);
                 try instruction_stack.appendSlice(instruction);
