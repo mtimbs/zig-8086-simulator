@@ -73,23 +73,30 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             std.log.debug("Reg: {s}", .{reg});
             std.log.debug("R/M: {s}", .{rm.register});
 
-            const destination = if (d_bit == 0b1) reg else rm.register;
-            const source = if (d_bit == 0b0) reg else rm.register;
+            var destination = if (d_bit == 0b1) reg else rm.register;
+            var source = if (d_bit == 0b0) reg else rm.register;
             if (rm.displacement == .None) {
                 // Note: the "[" "]" are not just for len > 2. It represents a dereference of the memory address.
                 // This is everything listed in table 4-10 (page 162). Just need a way to include displacement checks
-                const instruction = try interpolate(allocator, "mov {s}{s}{s}, {s}{s}{s}\n", .{ if (destination.len > 2) "[" else "", destination, if (destination.len > 2) "]" else "", if (source.len > 2) "[" else "", source, if (source.len > 2) "]" else "" });
+                if (mod_bits != 0b11) {
+                    if (d_bit == 0b1) {
+                        destination = try interpolate(allocator, "[{s}]", .{destination});
+                    } else {
+                        source = try interpolate(allocator, "[{s}]", .{source});
+                    }
+                }
+                const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
                 defer allocator.free(instruction);
                 try instruction_stack.appendSlice(instruction);
             } else if (rm.displacement == .Low) {
                 if (num_bytes >= i + 2) {
                     const d8_value = bytes_to_u16(&[_]u8{ contents[i + 2], 0b0 });
                     if (d8_value == 0) {
-                        const instruction = try interpolate(allocator, "mov {s}, [{s}]\n", .{ destination, source });
+                        const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
                         defer allocator.free(instruction);
                         try instruction_stack.appendSlice(instruction);
                     } else {
-                        const instruction = try interpolate(allocator, "mov {s}, [{s} + {d}]\n", .{ destination, source, d8_value });
+                        const instruction = try interpolate(allocator, "mov {s}, {s} + {d}\n", .{ destination, source, d8_value });
                         defer allocator.free(instruction);
                         try instruction_stack.appendSlice(instruction);
                     }
@@ -100,11 +107,11 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
                 if (num_bytes >= i + 3) {
                     const d16_value = bytes_to_u16(&[_]u8{ contents[i + 2], contents[i + 3] });
                     if (d16_value == 0) {
-                        const instruction = try interpolate(allocator, "mov {s}, [{s}]\n", .{ destination, source });
+                        const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
                         defer allocator.free(instruction);
                         try instruction_stack.appendSlice(instruction);
                     } else {
-                        const instruction = try interpolate(allocator, "mov {s}, [{s} + {d}]\n", .{ destination, source, d16_value });
+                        const instruction = try interpolate(allocator, "mov {s}, {s} + {d}\n", .{ destination, source, d16_value });
                         defer allocator.free(instruction);
                         try instruction_stack.appendSlice(instruction);
                     }
@@ -146,6 +153,12 @@ test "disassemble" {
     const res_4 = try disassemble(&allocator, @constCast(bytes_4[0..]));
     try std.testing.expectEqualSlices(u8, "mov al, [bx + si]\n", res_4);
     allocator.free(res_4);
+
+    //
+    const bytes_5 = [_]u8{ 0b10001000, 0b1101110, 0b0 };
+    const res_5 = try disassemble(&allocator, @constCast(bytes_5[0..]));
+    try std.testing.expectEqualSlices(u8, "mov [bp], ch\n", res_5);
+    allocator.free(res_5);
 }
 
 fn regDecoder(reg: u8, w: u8) ![]const u8 {
@@ -185,11 +198,11 @@ test "regDecoder" {
 }
 
 const Displacement = enum { None, Low, High };
-const EffectiveAddress = struct { register: []const u8, displacement: Displacement };
+const EffectiveAddress = struct { register: []const u8, displacement: Displacement, dereference: bool };
 fn rmDecoder(mod: u8, rm: u8, w: u8) !EffectiveAddress {
     if (mod == 0b11) {
         const register = try regDecoder(rm, w);
-        return EffectiveAddress{ .register = register, .displacement = .None };
+        return EffectiveAddress{ .register = register, .displacement = .None, .dereference = false };
     } else {
         const register = try switch (rm) {
             0b000 => "bx + si",
@@ -211,7 +224,7 @@ fn rmDecoder(mod: u8, rm: u8, w: u8) !EffectiveAddress {
             else => error.UnrecognisedRegisterFieldEncoding,
         };
 
-        return EffectiveAddress{ .register = register, .displacement = displacement };
+        return EffectiveAddress{ .register = register, .displacement = displacement, .dereference = true };
     }
 
     return error.UnrecognisedRegisterMemoryFieldEncoding;
