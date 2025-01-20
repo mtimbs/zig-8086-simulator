@@ -64,7 +64,7 @@ pub fn readFile(allocator: *const std.mem.Allocator, file_path: []const u8) ![]u
     return buffer;
 }
 
-pub fn writeAsmToFile(file_path: []const u8, instructions: []u8) !void {
+pub fn writeAsmToFile(file_path: []const u8, instructions: []const u8) !void {
     const output_file = try std.fs.cwd().createFile(
         file_path,
         .{ .read = true },
