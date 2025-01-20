@@ -4,6 +4,7 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
     var i: u8 = 0;
     // TODO: Use some kind of writer here or something to just do string formatting
     var instruction_stack = std.ArrayList(u8).init(allocator.*);
+    defer instruction_stack.deinit();
     const num_bytes = contents.len;
     while (i < num_bytes) : (i += 1) {
         std.log.debug("------------------------------", .{});
@@ -75,46 +76,55 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
 
             var destination = if (d_bit == 0b1) reg else rm.register;
             var source = if (d_bit == 0b0) reg else rm.register;
+            if (mod_bits != 0b11) {
+                if (d_bit == 0b1) {
+                    source = try interpolate(allocator, "[{s}]", .{rm.register});
+                } else {
+                    destination = try interpolate(allocator, "[{s}]", .{rm.register});
+                }
+            }
             if (rm.displacement == .None) {
                 // Note: the "[" "]" are not just for len > 2. It represents a dereference of the memory address.
                 // This is everything listed in table 4-10 (page 162). Just need a way to include displacement checks
-                if (mod_bits != 0b11) {
-                    if (d_bit == 0b1) {
-                        destination = try interpolate(allocator, "[{s}]", .{destination});
-                    } else {
-                        source = try interpolate(allocator, "[{s}]", .{source});
-                    }
-                }
+
                 const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
                 defer allocator.free(instruction);
                 try instruction_stack.appendSlice(instruction);
             } else if (rm.displacement == .Low) {
                 if (num_bytes >= i + 2) {
                     const d8_value = bytes_to_u16(&[_]u8{ contents[i + 2], 0b0 });
-                    if (d8_value == 0) {
-                        const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
-                        defer allocator.free(instruction);
-                        try instruction_stack.appendSlice(instruction);
-                    } else {
-                        const instruction = try interpolate(allocator, "mov {s}, {s} + {d}\n", .{ destination, source, d8_value });
-                        defer allocator.free(instruction);
-                        try instruction_stack.appendSlice(instruction);
+                    if (d8_value != 0) {
+                        if (mod_bits != 0b11) {
+                            if (d_bit == 0b1) {
+                                source = try interpolate(allocator, "[{s} + {d}]", .{ rm.register, d8_value });
+                            } else {
+                                destination = try interpolate(allocator, "[{s} + {d}]", .{ rm.register, d8_value });
+                            }
+                        }
                     }
+
+                    const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
+                    defer allocator.free(instruction);
+                    try instruction_stack.appendSlice(instruction);
                 } else {
                     return error.InsufficientBytesForDisplacementLow;
                 }
             } else {
                 if (num_bytes >= i + 3) {
                     const d16_value = bytes_to_u16(&[_]u8{ contents[i + 2], contents[i + 3] });
-                    if (d16_value == 0) {
-                        const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
-                        defer allocator.free(instruction);
-                        try instruction_stack.appendSlice(instruction);
-                    } else {
-                        const instruction = try interpolate(allocator, "mov {s}, {s} + {d}\n", .{ destination, source, d16_value });
-                        defer allocator.free(instruction);
-                        try instruction_stack.appendSlice(instruction);
+                    if (d16_value != 0) {
+                        if (mod_bits != 0b11) {
+                            if (d_bit == 0b1) {
+                                source = try interpolate(allocator, "[{s} + {d}]", .{ rm.register, d16_value });
+                            } else {
+                                destination = try interpolate(allocator, "[{s} + {d}]", .{ rm.register, d16_value });
+                            }
+                        }
                     }
+
+                    const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
+                    defer allocator.free(instruction);
+                    try instruction_stack.appendSlice(instruction);
                 } else {
                     return error.InsufficientBytesForDisplacementHigh;
                 }
@@ -125,7 +135,8 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
     }
 
     // Return the concatenated string
-    return instruction_stack.toOwnedSlice();
+    const result = instruction_stack.toOwnedSlice();
+    return result;
 }
 
 test "disassemble" {
