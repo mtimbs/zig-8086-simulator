@@ -1,11 +1,17 @@
 const std = @import("std");
 
-pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
+// Arguably I could take a writer as an argument here. This would allow me to write directly to
+// file or handle larger contents streams. However, I feel like this more 'functional' approach is
+// easier for me to reason about. So I will use it for now. I just need to hoist the writer init
+// to the call site in order to refactor this
+pub fn disassemble(contents: []u8) ![]u8 {
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    var writer = fbs.writer();
+
     var i: u8 = 0;
-    // TODO: Use some kind of writer here or something to just do string formatting
-    var instruction_stack = std.ArrayList(u8).init(allocator.*);
-    defer instruction_stack.deinit();
     const num_bytes = contents.len;
+
     while (i < num_bytes) : (i += 1) {
         std.log.debug("------------------------------", .{});
         const current_byte = contents[i];
@@ -26,25 +32,21 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             std.log.debug("W: {b}", .{w_bit});
             std.log.debug("reg: {b}", .{reg_bits});
 
-            const reg = try regDecoder(reg_bits, w_bit);
+            const reg = regDecoder(reg_bits, w_bit);
 
             if (w_bit == 0b1 and num_bytes >= i + 2) {
                 // Convert a [2]u8 to a u16
                 const immediate = bytes_to_u16(&[2]u8{ contents[i + 1], contents[i + 2] });
                 std.log.debug("immediate: {d}", .{immediate});
                 std.log.debug("reg: {s}", .{reg});
-                const instruction = try interpolate(allocator, "mov {s}, {d}\n", .{ reg, immediate });
-                defer allocator.free(instruction);
-                try instruction_stack.appendSlice(instruction);
+                try writer.print("mov {s}, {d}\n", .{ reg, immediate });
             } else {
                 // To convert to a u16 we need a [2]u8 so we just zero pad to align the bytes
                 const immediate = bytes_to_u16(&[2]u8{ contents[i + 1], 0b0 });
                 std.log.debug("immediate: {d}", .{immediate});
                 std.log.debug("reg: {s}", .{reg});
-                const instruction = try interpolate(allocator, "mov {s}, {d}\n", .{ reg, immediate });
-                defer allocator.free(instruction);
-                std.log.debug("instruction: {s}", .{instruction});
-                try instruction_stack.appendSlice(instruction);
+                try writer.print("mov {s}, {d}\n", .{ reg, immediate });
+                std.log.debug("instruction: {s}", .{fbs.getWritten()});
             }
 
             // If the w_bit is 0 we only had a single byte displacement so only need to skip the next byte.
@@ -61,7 +63,7 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             const mod_bits = next_byte >> 6;
             const reg_bits = next_byte >> 3 & ((1 << 3) - 1);
             const rm_bits = next_byte & ((1 << 3) - 1);
-            const reg = try regDecoder(reg_bits, w_bit);
+            const reg = regDecoder(reg_bits, w_bit);
             const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
 
             std.log.debug("OPCODE: {b}", .{current_byte >> 2});
@@ -74,38 +76,52 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
             std.log.debug("Reg: {s}", .{reg});
             std.log.debug("R/M: {s}", .{rm.register});
 
-            var destination = if (d_bit == 0b1) reg else rm.register;
-            var source = if (d_bit == 0b0) reg else rm.register;
-            if (mod_bits != 0b11) {
-                if (d_bit == 0b1) {
-                    source = try interpolate(allocator, "[{s}]", .{rm.register});
+            // Using a fixed buffer for temporary strings
+            var dest_buf: [32]u8 = undefined;
+            var src_buf: [32]u8 = undefined;
+            var dest_fbs = std.io.fixedBufferStream(&dest_buf);
+            var src_fbs = std.io.fixedBufferStream(&src_buf);
+
+            if (d_bit == 0b1) {
+                try dest_fbs.writer().writeAll(reg);
+                if (mod_bits != 0b11) {
+                    try src_fbs.writer().print("[{s}]", .{rm.register});
                 } else {
-                    destination = try interpolate(allocator, "[{s}]", .{rm.register});
+                    try src_fbs.writer().writeAll(rm.register);
                 }
+            } else {
+                if (mod_bits != 0b11) {
+                    try dest_fbs.writer().print("[{s}]", .{rm.register});
+                } else {
+                    try dest_fbs.writer().writeAll(rm.register);
+                }
+                try src_fbs.writer().writeAll(reg);
             }
+
             if (rm.displacement == .None) {
                 // Note: the "[" "]" are not just for len > 2. It represents a dereference of the memory address.
                 // This is everything listed in table 4-10 (page 162). Just need a way to include displacement checks
-
-                const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
-                defer allocator.free(instruction);
-                try instruction_stack.appendSlice(instruction);
+                try writer.print("mov {s}, {s}\n", .{ dest_fbs.getWritten(), src_fbs.getWritten() });
             } else if (rm.displacement == .Low) {
                 if (num_bytes >= i + 2) {
                     const d8_value = bytes_to_u16(&[_]u8{ contents[i + 2], 0b0 });
                     if (d8_value != 0) {
+                        // Reset buffers
+                        dest_fbs.reset();
+                        src_fbs.reset();
+
                         if (mod_bits != 0b11) {
                             if (d_bit == 0b1) {
-                                source = try interpolate(allocator, "[{s} + {d}]", .{ rm.register, d8_value });
+                                try dest_fbs.writer().writeAll(reg);
+                                try src_fbs.writer().print("[{s} + {d}]", .{ rm.register, d8_value });
                             } else {
-                                destination = try interpolate(allocator, "[{s} + {d}]", .{ rm.register, d8_value });
+                                try dest_fbs.writer().print("[{s} + {d}]", .{ rm.register, d8_value });
+                                try src_fbs.writer().writeAll(reg);
                             }
                         }
                     }
 
-                    const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
-                    defer allocator.free(instruction);
-                    try instruction_stack.appendSlice(instruction);
+                    try writer.print("mov {s}, {s}\n", .{ dest_fbs.getWritten(), src_fbs.getWritten() });
                 } else {
                     return error.InsufficientBytesForDisplacementLow;
                 }
@@ -113,18 +129,22 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
                 if (num_bytes >= i + 3) {
                     const d16_value = bytes_to_u16(&[_]u8{ contents[i + 2], contents[i + 3] });
                     if (d16_value != 0) {
+                        // Reset buffers
+                        dest_fbs.reset();
+                        src_fbs.reset();
+
                         if (mod_bits != 0b11) {
                             if (d_bit == 0b1) {
-                                source = try interpolate(allocator, "[{s} + {d}]", .{ rm.register, d16_value });
+                                try dest_fbs.writer().writeAll(reg);
+                                try src_fbs.writer().print("[{s} + {d}]", .{ rm.register, d16_value });
                             } else {
-                                destination = try interpolate(allocator, "[{s} + {d}]", .{ rm.register, d16_value });
+                                try dest_fbs.writer().print("[{s} + {d}]", .{ rm.register, d16_value });
+                                try src_fbs.writer().writeAll(reg);
                             }
                         }
                     }
 
-                    const instruction = try interpolate(allocator, "mov {s}, {s}\n", .{ destination, source });
-                    defer allocator.free(instruction);
-                    try instruction_stack.appendSlice(instruction);
+                    try writer.print("mov {s}, {s}\n", .{ dest_fbs.getWritten(), src_fbs.getWritten() });
                 } else {
                     return error.InsufficientBytesForDisplacementHigh;
                 }
@@ -134,45 +154,38 @@ pub fn disassemble(allocator: *const std.mem.Allocator, contents: []u8) ![]u8 {
         }
     }
 
-    // Return the concatenated string
-    const result = instruction_stack.toOwnedSlice();
-    return result;
+    return fbs.getWritten();
 }
 
 test "disassemble" {
+
     // Register-to-register
-    const allocator = std.testing.allocator;
     const bytes = [_]u8{ 0b10001001, 0b11011110 };
-    const res = try disassemble(&allocator, @constCast(bytes[0..]));
+    const res = try disassemble(@constCast(bytes[0..]));
     try std.testing.expectEqualSlices(u8, "mov si, bx\n", res);
-    allocator.free(res);
 
     // 8-bit immediate-to-register (unsigned wrap/overflow)
     const bytes_2 = [_]u8{ 0b10110101, 0b11110100 };
-    const res_2 = try disassemble(&allocator, @constCast(bytes_2[0..]));
+    const res_2 = try disassemble(@constCast(bytes_2[0..]));
     try std.testing.expectEqualSlices(u8, "mov ch, 244\n", res_2);
-    allocator.free(res_2);
 
     // 16-bit immediate-to-register (unsigned wrap/overflow)
     const bytes_3 = [_]u8{ 0b10111001, 0b00001100, 0b0000000 };
-    const res_3 = try disassemble(&allocator, @constCast(bytes_3[0..]));
+    const res_3 = try disassemble(@constCast(bytes_3[0..]));
     try std.testing.expectEqualSlices(u8, "mov cx, 12\n", res_3);
-    allocator.free(res_3);
 
     // Source address calculation
     const bytes_4 = [_]u8{ 0b10001010, 0b0 };
-    const res_4 = try disassemble(&allocator, @constCast(bytes_4[0..]));
+    const res_4 = try disassemble(@constCast(bytes_4[0..]));
     try std.testing.expectEqualSlices(u8, "mov al, [bx + si]\n", res_4);
-    allocator.free(res_4);
 
     //
     const bytes_5 = [_]u8{ 0b10001000, 0b1101110, 0b0 };
-    const res_5 = try disassemble(&allocator, @constCast(bytes_5[0..]));
+    const res_5 = try disassemble(@constCast(bytes_5[0..]));
     try std.testing.expectEqualSlices(u8, "mov [bp], ch\n", res_5);
-    allocator.free(res_5);
 }
 
-fn regDecoder(reg: u8, w: u8) ![]const u8 {
+fn regDecoder(reg: u8, w: u8) []const u8 {
     return switch ((reg << 1) + w) {
         0b0000 => "al",
         0b0001 => "ax",
@@ -190,20 +203,20 @@ fn regDecoder(reg: u8, w: u8) ![]const u8 {
         0b1101 => "si",
         0b1110 => "bh",
         0b1111 => "di",
-        else => error.UnrecognisedRegisterFieldEncoding,
+        else => unreachable,
     };
 }
 
 test "regDecoder" {
-    var output = try regDecoder(0b000, 0b1);
+    var output = regDecoder(0b000, 0b1);
     var expected = "ax";
     try std.testing.expectEqualSlices(u8, output, expected);
 
-    output = try regDecoder(0b000, 0b0);
+    output = regDecoder(0b000, 0b0);
     expected = "al";
     try std.testing.expectEqualSlices(u8, output, expected);
 
-    output = try regDecoder(0b001, 0b1);
+    output = regDecoder(0b001, 0b1);
     expected = "cx";
     try std.testing.expectEqualSlices(u8, output, expected);
 }
@@ -212,8 +225,7 @@ const Displacement = enum { None, Low, High };
 const EffectiveAddress = struct { register: []const u8, displacement: Displacement, dereference: bool };
 fn rmDecoder(mod: u8, rm: u8, w: u8) !EffectiveAddress {
     if (mod == 0b11) {
-        const register = try regDecoder(rm, w);
-        return EffectiveAddress{ .register = register, .displacement = .None, .dereference = false };
+        return EffectiveAddress{ .register = regDecoder(rm, w), .displacement = .None, .dereference = false };
     } else {
         const register = try switch (rm) {
             0b000 => "bx + si",
@@ -257,32 +269,4 @@ test "bytes_to_u16" {
     try std.testing.expectEqual(12, bytes_to_u16(&[_]u8{ 0b1100, 0b0 }));
     try std.testing.expectEqual(244, bytes_to_u16(&[_]u8{ 0b11110100, 0b0 }));
     try std.testing.expectEqual(3948, bytes_to_u16(&[_]u8{ 0b1101100, 0b1111 }));
-}
-
-fn interpolate(
-    allocator: *const std.mem.Allocator,
-    comptime fmt: []const u8,
-    args: anytype,
-) ![]const u8 {
-    var buf: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const writer = fbs.writer();
-    try writer.print(fmt, args);
-    const str = fbs.getWritten();
-    const allocated_str = try allocator.alloc(u8, str.len);
-    std.mem.copyForwards(u8, allocated_str, str);
-    return allocated_str;
-}
-
-test "interpolate" {
-    const allocator = std.testing.allocator;
-    const destination = "cx";
-    const source = "bx";
-    const str = try interpolate(&allocator, "mov {s}, {s}\n", .{ destination, source });
-    defer allocator.free(str);
-    try std.testing.expectEqualSlices(u8, str, "mov cx, bx\n");
-
-    const str_2 = try interpolate(&allocator, "mov {s}, {d}\n", .{ "cl", 24 });
-    defer allocator.free(str_2);
-    try std.testing.expectEqualSlices(u8, str_2, "mov cl, 24\n");
 }
