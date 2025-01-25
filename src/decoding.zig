@@ -21,7 +21,7 @@ const Instruction = struct {
     bytes_consumed: u8,
 };
 
-fn handleRegisterMemoryToRegisterMove(contents: []const u8, i: u8) !Instruction {
+fn handleRegisterMemoryToFromRegisterMove(contents: []const u8, i: u8) !Instruction {
     const current_byte = contents[i];
     const next_byte = contents[i + 1];
     const d_bit = current_byte >> 1 & 1;
@@ -31,6 +31,14 @@ fn handleRegisterMemoryToRegisterMove(contents: []const u8, i: u8) !Instruction 
     const rm_bits = next_byte & ((1 << 3) - 1);
     const reg = regDecoder(reg_bits, w_bit);
     const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
+
+    std.log.debug("OPCODE: {b}", .{current_byte >> 2});
+    std.log.debug("W: {b}", .{w_bit});
+    std.log.debug("D: {b}", .{d_bit});
+    std.log.debug("MOD: {b}", .{mod_bits});
+    std.log.debug("RM: {b}", .{rm_bits});
+    std.log.debug("Reg: {b}", .{reg_bits});
+    std.log.debug("Reg: {s}", .{rm.register});
 
     var displacement: ?i16 = null;
     var bytes_consumed: u8 = 2; // Default to consuming opcode + mod/rm byte
@@ -54,6 +62,7 @@ fn handleRegisterMemoryToRegisterMove(contents: []const u8, i: u8) !Instruction 
             }
             const d16_value = @as(i16, @bitCast(bytes_to_u16(&[_]u8{ contents[i + 2], contents[i + 3] })));
             if (d16_value != 0) {
+                std.log.debug("Displacemnt: {d}", .{d16_value});
                 displacement = d16_value;
                 bytes_consumed += 2;
             }
@@ -179,10 +188,14 @@ fn formatOperand(writer: anytype, operand: Operand) !void {
             try writer.writeByte('[');
             try writer.writeAll(mem.register);
             if (mem.displacement) |disp| {
-                if (disp < 0) {
-                    try writer.print(" - {d}", .{-disp});
-                } else if (disp > 0) {
-                    try writer.print(" + {d}", .{disp});
+                if (mem.register.len > 0) {
+                    if (disp < 0) {
+                        try writer.print(" - {d}", .{-disp});
+                    } else if (disp > 0) {
+                        try writer.print(" + {d}", .{disp});
+                    }
+                } else {
+                    try writer.print("{d}", .{disp});
                 }
             }
             try writer.writeByte(']');
@@ -192,7 +205,6 @@ fn formatOperand(writer: anytype, operand: Operand) !void {
 
 fn formatInstruction(writer: anytype, instruction: Instruction) !void {
     try writer.writeAll("mov ");
-
     try formatOperand(writer, instruction.destination);
     try writer.writeAll(", ");
     try formatOperand(writer, instruction.source);
@@ -218,7 +230,7 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
         }
 
         const instruction = if (current_byte >> 2 == 0b100010 and contents.len > i)
-            try handleRegisterMemoryToRegisterMove(contents, i)
+            try handleRegisterMemoryToFromRegisterMove(contents, i)
         else if (current_byte >> 1 == 0b1100011)
             try handleImmediateToRegisterMemoryMove(contents, i)
         else if (current_byte >> 4 == 0b1011)
@@ -282,6 +294,12 @@ test "disassemble" {
     const bytes_7 = [_]u8{ 0b11000110, 0b11, 0b111 };
     const res_7 = try disassemble(&bytes_7, &buffer);
     try std.testing.expectEqualSlices(u8, "mov [bp + di], byte 7\n", res_7);
+
+    // direct address
+    buffer = undefined;
+    const bytes_8 = [_]u8{ 0b10001011, 0b101110, 0b101, 0b0 };
+    const res_8 = try disassemble(&bytes_8, &buffer);
+    try std.testing.expectEqualSlices(u8, "mov bp, [5]\n", res_8);
 }
 
 fn regDecoder(reg: u8, w: u8) []const u8 {
@@ -333,7 +351,7 @@ fn rmDecoder(mod: u8, rm: u8, w: u8) !EffectiveAddress {
             0b011 => "bp + di",
             0b100 => "si",
             0b101 => "di",
-            0b110 => "bp",
+            0b110 => if (mod == 0b00) "" else "bp",
             0b111 => "bx",
             else => error.UnrecognisedRMFieldEncoding,
         };
