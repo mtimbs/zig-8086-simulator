@@ -41,27 +41,13 @@ pub fn parseArgs() !ParsedArgs {
     return result;
 }
 
-pub fn readFile(allocator: *const std.mem.Allocator, file_path: []const u8) ![]u8 {
+pub fn readFile(buffer: []u8, file_path: []const u8) ![]u8 {
     // Open the file
     const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
 
-    // Get the size of the file
-    const file_size = try file.getEndPos();
-
-    // Allocate memory for the file contents
-    const buffer = try allocator.alloc(u8, file_size);
-    errdefer allocator.free(buffer);
-
-    // Read the entire file into the buffer
     const bytes_read = try file.readAll(buffer);
-    if (bytes_read != file_size) {
-        // If we didn't read the whole file, return an error
-        return error.FileReadError;
-    }
-
-    // Return the buffer containing the file contents
-    return buffer;
+    return buffer[0..bytes_read];
 }
 
 pub fn writeAsmToFile(file_path: []const u8, instructions: []const u8) !void {

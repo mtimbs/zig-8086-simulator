@@ -14,7 +14,7 @@ bits 16
 ; mov bx, [3458]
 
 ; Memory-to-accumulator test
-mov ax, [2555]
+; mov ax, [2555]
 ; mov ax, [16]
 
 ; Accumulator-to-memory test
