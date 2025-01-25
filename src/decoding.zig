@@ -128,9 +128,9 @@ fn handleImmediateToRegisterMemoryMove(contents: []const u8, i: u8) !Instruction
     }
 
     const immediate = if (w_bit == 0b0 and contents.len >= i + bytes_consumed)
-        bytes_to_u16(&[2]u8{ contents[bytes_consumed], 0b0 })
+        bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], 0b0 })
     else if (w_bit == 0b1 and contents.len >= i + bytes_consumed + 1)
-        bytes_to_u16(&[2]u8{ contents[bytes_consumed], contents[bytes_consumed + 1] })
+        bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], contents[i + bytes_consumed + 1] })
     else
         return error.InsufficientBytesForImmediate;
     // We either consumed 1 or 2 bytes depending on if w was 0 or 1
@@ -172,6 +172,34 @@ fn handleImmediateToRegisterMove(contents: []const u8, i: u8) !Instruction {
     // If the w_bit is 0 we had a 1 byte displacement so we skip next byte (bytes consumed = 2).
     // If the w_bit is 1 we had a 2 byte displacement so we increment by two (bytes_consumed = 3).
     return Instruction{ .destination = Operand{ .register = reg }, .source = Operand{ .immediate = .{ .value = immediate, .kind = .value } }, .bytes_consumed = if (w_bit == 0b1) 3 else 2 };
+}
+
+fn handleMemoryToAccumulator(contents: []const u8, i: u8) !Instruction {
+    const current_byte = contents[i];
+    const w_bit = current_byte & 1;
+    const addr_lo = contents[i + 1];
+    const addr_hi = contents[i + 2];
+
+    const displacement = @as(i16, @bitCast(bytes_to_u16(&[2]u8{ addr_lo, addr_hi })));
+    const reg = regDecoder(0b000, w_bit);
+
+    return Instruction{ .destination = Operand{ .register = reg }, .source = Operand{ .memory = .{
+        .register = "",
+        .displacement = displacement,
+    } }, .bytes_consumed = 3 };
+}
+
+fn handleAccumulatorToMemory(contents: []const u8, i: u8) !Instruction {
+    const current_byte = contents[i];
+    const w_bit = current_byte & 1;
+    const addr_lo = contents[i + 1];
+    const addr_hi = contents[i + 2];
+    const displacement = @as(i16, @bitCast(bytes_to_u16(&[2]u8{ addr_lo, addr_hi })));
+    const reg = regDecoder(0b000, w_bit);
+    return Instruction{ .destination = Operand{ .memory = .{
+        .register = "",
+        .displacement = displacement,
+    } }, .source = Operand{ .register = reg }, .bytes_consumed = 3 };
 }
 
 fn formatOperand(writer: anytype, operand: Operand) !void {
@@ -235,6 +263,10 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
             try handleImmediateToRegisterMemoryMove(contents, i)
         else if (current_byte >> 4 == 0b1011)
             try handleImmediateToRegisterMove(contents, i)
+        else if (current_byte >> 1 == 0b1010000)
+            try handleMemoryToAccumulator(contents, i)
+        else if (current_byte >> 1 == 0b1010001)
+            try handleAccumulatorToMemory(contents, i)
         else {
             i += 1;
             std.log.debug("OPCODE: {b}", .{current_byte});
