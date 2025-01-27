@@ -3,8 +3,8 @@ set -euo pipefail
 
 mkdir -p output
 
-INPUT="asm_examples/challenge_mov.asm"
-OUTPUT="output/challenge_mov.asm"
+INPUT="asm_examples/add_sub_cmp_jnz.asm"
+OUTPUT="output/add_sub_cmp_jnz.asm"
 
 echo "Building ${INPUT}..."
 

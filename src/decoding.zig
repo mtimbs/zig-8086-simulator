@@ -15,13 +15,16 @@ const Operand = union(enum) {
     },
 };
 
+const InstructionKind = enum { MOVE, ADD };
+
 const Instruction = struct {
+    kind: InstructionKind,
     destination: Operand,
     source: Operand,
     bytes_consumed: u8,
 };
 
-fn handleRegisterMemoryToFromRegisterMove(contents: []const u8, i: u8) !Instruction {
+fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
     const current_byte = contents[i];
     const next_byte = contents[i + 1];
     const d_bit = current_byte >> 1 & 1;
@@ -53,8 +56,8 @@ fn handleRegisterMemoryToFromRegisterMove(contents: []const u8, i: u8) !Instruct
             const d8_value = @as(i16, signed_byte);
             if (d8_value != 0) {
                 displacement = d8_value;
-                bytes_consumed += 1;
             }
+            bytes_consumed += 1;
         },
         .High => {
             if (contents.len < i + 4) {
@@ -64,8 +67,8 @@ fn handleRegisterMemoryToFromRegisterMove(contents: []const u8, i: u8) !Instruct
             if (d16_value != 0) {
                 std.log.debug("Displacemnt: {d}", .{d16_value});
                 displacement = d16_value;
-                bytes_consumed += 2;
             }
+            bytes_consumed += 2;
         },
     }
 
@@ -79,32 +82,38 @@ fn handleRegisterMemoryToFromRegisterMove(contents: []const u8, i: u8) !Instruct
         } };
 
     return Instruction{
+        .kind = kind,
         .destination = if (d_bit == 0b1) reg_operand else rm_operand,
         .source = if (d_bit == 0b1) rm_operand else reg_operand,
         .bytes_consumed = bytes_consumed,
     };
 }
 
-fn handleImmediateToRegisterMemoryMove(contents: []const u8, i: u8) !Instruction {
+fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
     const current_byte = contents[i];
     const next_byte = contents[i + 1];
     const w_bit = current_byte & 1;
+    const s_bit = if (kind == .ADD) (current_byte >> 1) & 1 else 0;
     const mod_bits = next_byte >> 6;
     const rm_bits = next_byte & ((1 << 3) - 1);
     const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
 
     std.log.debug("OPCODE: {b}", .{current_byte >> 2});
     std.log.debug("W: {b}", .{w_bit});
+    std.log.debug("S: {b}", .{s_bit});
     std.log.debug("MOD: {b}", .{mod_bits});
     std.log.debug("R/M: {b}", .{rm_bits});
-    std.log.debug("R/M: {s}", .{rm.register});
+    std.log.debug("Register: {s}", .{rm.register});
 
     var displacement: ?i16 = null;
     var bytes_consumed: u8 = 2; // Default to consuming opcode + mod/rm byte
 
     switch (rm.displacement) {
-        .None => {},
+        .None => {
+            std.log.debug("Displacement: None", .{});
+        },
         .Low => {
+            std.log.debug("Displacement: Low", .{});
             if (contents.len < i + 3) {
                 return error.InsufficientBytesForDisplacementLow;
             }
@@ -112,24 +121,30 @@ fn handleImmediateToRegisterMemoryMove(contents: []const u8, i: u8) !Instruction
             const d8_value = @as(i16, signed_byte);
             if (d8_value != 0) {
                 displacement = d8_value;
-                bytes_consumed += 1;
             }
+            bytes_consumed += 1;
         },
         .High => {
+            std.log.debug("Displacement: High", .{});
             if (contents.len < i + 4) {
                 return error.InsufficientBytesForDisplacementHigh;
             }
             const d16_value = @as(i16, @bitCast(bytes_to_u16(&[_]u8{ contents[i + 2], contents[i + 3] })));
             if (d16_value != 0) {
                 displacement = d16_value;
-                bytes_consumed += 2;
             }
+            bytes_consumed += 2;
         },
     }
 
-    const immediate = if (w_bit == 0b0 and contents.len >= i + bytes_consumed)
+    std.log.debug("Bytes consumed: {d}", .{bytes_consumed});
+    std.log.debug("i: {d}", .{i});
+
+    const immediate = if (w_bit == 0b0 and contents.len > i + bytes_consumed)
         bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], 0b0 })
-    else if (w_bit == 0b1 and contents.len >= i + bytes_consumed + 1)
+    else if (w_bit == 0b1 and s_bit == 0b1 and contents.len > i + bytes_consumed)
+        bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], 0b0 })
+    else if (w_bit == 0b1 and s_bit == 0b0 and contents.len > i + bytes_consumed + 1)
         bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], contents[i + bytes_consumed + 1] })
     else
         return error.InsufficientBytesForImmediate;
@@ -145,13 +160,14 @@ fn handleImmediateToRegisterMemoryMove(contents: []const u8, i: u8) !Instruction
         } };
 
     return Instruction{
+        .kind = kind,
         .destination = rm_operand,
-        .source = Operand{ .immediate = .{ .value = immediate, .kind = if (w_bit == 0b0) .byte else .word } },
+        .source = Operand{ .immediate = .{ .value = immediate, .kind = if (kind == .ADD) .value else if (w_bit == 0b0) .byte else .word } },
         .bytes_consumed = bytes_consumed,
     };
 }
 
-fn handleImmediateToRegisterMove(contents: []const u8, i: u8) !Instruction {
+fn handleImmediateToRegister(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
     const current_byte = contents[i];
     const data_one = contents[i + 1];
     const w_bit = (current_byte >> 3) & 1;
@@ -171,10 +187,10 @@ fn handleImmediateToRegisterMove(contents: []const u8, i: u8) !Instruction {
 
     // If the w_bit is 0 we had a 1 byte displacement so we skip next byte (bytes consumed = 2).
     // If the w_bit is 1 we had a 2 byte displacement so we increment by two (bytes_consumed = 3).
-    return Instruction{ .destination = Operand{ .register = reg }, .source = Operand{ .immediate = .{ .value = immediate, .kind = .value } }, .bytes_consumed = if (w_bit == 0b1) 3 else 2 };
+    return Instruction{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .immediate = .{ .value = immediate, .kind = .value } }, .bytes_consumed = if (w_bit == 0b1) 3 else 2 };
 }
 
-fn handleMemoryToAccumulator(contents: []const u8, i: u8) !Instruction {
+fn handleMemoryToAccumulator(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
     const current_byte = contents[i];
     const w_bit = current_byte & 1;
     const addr_lo = contents[i + 1];
@@ -183,20 +199,20 @@ fn handleMemoryToAccumulator(contents: []const u8, i: u8) !Instruction {
     const displacement = @as(i16, @bitCast(bytes_to_u16(&[2]u8{ addr_lo, addr_hi })));
     const reg = regDecoder(0b000, w_bit);
 
-    return Instruction{ .destination = Operand{ .register = reg }, .source = Operand{ .memory = .{
+    return Instruction{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .memory = .{
         .register = "",
         .displacement = displacement,
     } }, .bytes_consumed = 3 };
 }
 
-fn handleAccumulatorToMemory(contents: []const u8, i: u8) !Instruction {
+fn handleAccumulatorToMemory(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
     const current_byte = contents[i];
     const w_bit = current_byte & 1;
     const addr_lo = contents[i + 1];
     const addr_hi = contents[i + 2];
     const displacement = @as(i16, @bitCast(bytes_to_u16(&[2]u8{ addr_lo, addr_hi })));
     const reg = regDecoder(0b000, w_bit);
-    return Instruction{ .destination = Operand{ .memory = .{
+    return Instruction{ .kind = kind, .destination = Operand{ .memory = .{
         .register = "",
         .displacement = displacement,
     } }, .source = Operand{ .register = reg }, .bytes_consumed = 3 };
@@ -232,7 +248,11 @@ fn formatOperand(writer: anytype, operand: Operand) !void {
 }
 
 fn formatInstruction(writer: anytype, instruction: Instruction) !void {
-    try writer.writeAll("mov ");
+    const instructionKind = switch (instruction.kind) {
+        .MOVE => "mov",
+        .ADD => "add",
+    };
+    try writer.print("{s} ", .{instructionKind});
     try formatOperand(writer, instruction.destination);
     try writer.writeAll(", ");
     try formatOperand(writer, instruction.source);
@@ -258,15 +278,19 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
         }
 
         const instruction = if (current_byte >> 2 == 0b100010 and contents.len > i)
-            try handleRegisterMemoryToFromRegisterMove(contents, i)
+            try handleRegisterMemoryToFromRegister(contents, i, .MOVE)
         else if (current_byte >> 1 == 0b1100011)
-            try handleImmediateToRegisterMemoryMove(contents, i)
+            try handleImmediateToRegisterMemory(contents, i, .MOVE)
         else if (current_byte >> 4 == 0b1011)
-            try handleImmediateToRegisterMove(contents, i)
+            try handleImmediateToRegister(contents, i, .MOVE)
         else if (current_byte >> 1 == 0b1010000)
-            try handleMemoryToAccumulator(contents, i)
+            try handleMemoryToAccumulator(contents, i, .MOVE)
         else if (current_byte >> 1 == 0b1010001)
-            try handleAccumulatorToMemory(contents, i)
+            try handleAccumulatorToMemory(contents, i, .MOVE)
+        else if (current_byte >> 2 == 0b0)
+            try handleRegisterMemoryToFromRegister(contents, i, .ADD)
+        else if (current_byte >> 2 == 0b100000)
+            try handleImmediateToRegisterMemory(contents, i, .ADD)
         else {
             i += 1;
             std.log.debug("OPCODE: {b}", .{current_byte});
@@ -332,6 +356,18 @@ test "disassemble" {
     const bytes_8 = [_]u8{ 0b10001011, 0b101110, 0b101, 0b0 };
     const res_8 = try disassemble(&bytes_8, &buffer);
     try std.testing.expectEqualSlices(u8, "mov bp, [5]\n", res_8);
+
+    // add Register-to-register
+    buffer = undefined;
+    const bytes_9 = [_]u8{ 0b11, 0b11000 };
+    const res_9 = try disassemble(&bytes_9, &buffer);
+    try std.testing.expectEqualSlices(u8, "add bx, [bx + si]\n", res_9);
+
+    // add Register-to-register
+    buffer = undefined;
+    const bytes_10 = [_]u8{ 0b10000011, 0b11000110, 0b10 };
+    const res_10 = try disassemble(&bytes_10, &buffer);
+    try std.testing.expectEqualSlices(u8, "add si, 2\n", res_10);
 }
 
 fn regDecoder(reg: u8, w: u8) []const u8 {
