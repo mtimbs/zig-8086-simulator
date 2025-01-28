@@ -17,7 +17,7 @@ const Operand = union(enum) {
     },
 };
 
-const InstructionKind = enum { MOVE, ADD };
+const InstructionKind = enum { MOVE, ADD, SUBTRACT };
 
 const Instruction = struct {
     kind: InstructionKind,
@@ -96,7 +96,7 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: Instructio
     const current_byte = contents[i];
     const next_byte = contents[i + 1];
     const w_bit = current_byte & 1;
-    const s_bit = if (kind == .ADD) (current_byte >> 1) & 1 else 0;
+    const s_bit = if (kind == .MOVE) 0 else (current_byte >> 1) & 1;
     const mod_bits = next_byte >> 6;
     const rm_bits = next_byte & ((1 << 3) - 1);
     const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
@@ -293,6 +293,7 @@ fn formatInstruction(writer: anytype, instruction: Instruction) !void {
     const instructionKind = switch (instruction.kind) {
         .MOVE => "mov",
         .ADD => "add",
+        .SUBTRACT => "sub",
     };
     try writer.print("{s} ", .{instructionKind});
     try formatOperand(writer, instruction.destination);
@@ -331,10 +332,16 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
             try handleAccumulatorToMemory(contents, i, .MOVE)
         else if (current_byte >> 2 == 0b0)
             try handleRegisterMemoryToFromRegister(contents, i, .ADD)
-        else if (current_byte >> 2 == 0b100000)
+        else if (current_byte >> 2 == 0b100000 and (contents[i + 1] >> 3) & 0b111 == 0b000)
             try handleImmediateToRegisterMemory(contents, i, .ADD)
         else if ((current_byte & 0b11111110) == 0b00000100)
             try handleImmediateToAccumulator(contents, i, .ADD)
+        else if (current_byte >> 2 == 0b1010)
+            try handleRegisterMemoryToFromRegister(contents, i, .SUBTRACT)
+        else if (current_byte >> 2 == 0b100000 and (contents[i + 1] >> 3) & 0b111 == 0b101)
+            try handleImmediateToRegisterMemory(contents, i, .SUBTRACT)
+        else if ((current_byte & 0b11111110) == 0b00101100)
+            try handleImmediateToAccumulator(contents, i, .SUBTRACT)
         else {
             i += 1;
             std.log.debug("OPCODE: {b}", .{current_byte});
@@ -416,6 +423,12 @@ test "disassemble" {
     const bytes_11 = [_]u8{ 0b101, 0b11101000, 0b11 };
     const res_11 = try disassemble(&bytes_11, &buffer);
     try std.testing.expectEqualSlices(u8, "add ax, 1000\n", res_11);
+
+    // SUB Register-to-register
+    buffer = undefined;
+    const bytes_12 = [_]u8{ 0b10000011, 0b11101110, 0b10 };
+    const res_12 = try disassemble(&bytes_12, &buffer);
+    try std.testing.expectEqualSlices(u8, "sub si, 2\n", res_12);
 }
 
 fn regDecoder(reg: u8, w: u8) []const u8 {
