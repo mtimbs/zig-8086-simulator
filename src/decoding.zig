@@ -1,15 +1,17 @@
 const std = @import("std");
+const OperandKind = enum {
+    value,
+    byte,
+    word,
+};
 const Operand = union(enum) {
     immediate: struct {
         value: u16,
-        kind: enum {
-            value,
-            byte,
-            word,
-        },
+        kind: OperandKind,
     },
     register: []const u8,
     memory: struct {
+        kind: OperandKind,
         register: []const u8,
         displacement: ?i16 = null,
     },
@@ -77,6 +79,7 @@ fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: Instruc
         Operand{ .register = rm.register }
     else
         Operand{ .memory = .{
+            .kind = .value,
             .register = rm.register,
             .displacement = displacement,
         } };
@@ -140,21 +143,27 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: Instructio
     std.log.debug("Bytes consumed: {d}", .{bytes_consumed});
     std.log.debug("i: {d}", .{i});
 
-    const immediate = if (w_bit == 0b0 and contents.len > i + bytes_consumed)
-        bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], 0b0 })
+    const immediate = if (s_bit == 0b0 and w_bit == 0b1 and contents.len > i + bytes_consumed + 1)
+        bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], contents[i + bytes_consumed + 1] })
     else if (w_bit == 0b1 and s_bit == 0b1 and contents.len > i + bytes_consumed)
         bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], 0b0 })
-    else if (w_bit == 0b1 and s_bit == 0b0 and contents.len > i + bytes_consumed + 1)
-        bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], contents[i + bytes_consumed + 1] })
+    else if (w_bit == 0b0 and contents.len > i + bytes_consumed)
+        bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], 0b0 })
     else
         return error.InsufficientBytesForImmediate;
-    // We either consumed 1 or 2 bytes depending on if w was 0 or 1
-    bytes_consumed += (1 + w_bit);
-
-    const rm_operand = if (mod_bits == 0b11)
+    // We either consumed 1 or 2 bytes depending on if w was 0 or 1. We do some hackery here because with add/sub etc, the w_bit being 1 actually means there is only a single byte data. It is only
+    if (w_bit == 0b1 and s_bit == 1) {
+        bytes_consumed += 1;
+    } else {
+        bytes_consumed += (1 + w_bit);
+    }
+    std.log.debug("Bytes consumed: {d}", .{bytes_consumed});
+    const is_memory = mod_bits != 0b11;
+    const rm_operand = if (!is_memory)
         Operand{ .register = rm.register }
     else
         Operand{ .memory = .{
+            .kind = getOperandKind(kind, is_memory, w_bit, true),
             .register = rm.register,
             .displacement = displacement,
         } };
@@ -162,7 +171,10 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: Instructio
     return Instruction{
         .kind = kind,
         .destination = rm_operand,
-        .source = Operand{ .immediate = .{ .value = immediate, .kind = if (kind == .ADD) .value else if (w_bit == 0b0) .byte else .word } },
+        .source = Operand{ .immediate = .{
+            .value = immediate,
+            .kind = getOperandKind(kind, is_memory, w_bit, false),
+        } },
         .bytes_consumed = bytes_consumed,
     };
 }
@@ -200,6 +212,7 @@ fn handleMemoryToAccumulator(contents: []const u8, i: u8, kind: InstructionKind)
     const reg = regDecoder(0b000, w_bit);
 
     return Instruction{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .memory = .{
+        .kind = .value,
         .register = "",
         .displacement = displacement,
     } }, .bytes_consumed = 3 };
@@ -213,9 +226,33 @@ fn handleAccumulatorToMemory(contents: []const u8, i: u8, kind: InstructionKind)
     const displacement = @as(i16, @bitCast(bytes_to_u16(&[2]u8{ addr_lo, addr_hi })));
     const reg = regDecoder(0b000, w_bit);
     return Instruction{ .kind = kind, .destination = Operand{ .memory = .{
+        .kind = if (w_bit == 0b0) .byte else .word,
         .register = "",
         .displacement = displacement,
     } }, .source = Operand{ .register = reg }, .bytes_consumed = 3 };
+}
+
+fn handleImmediateToAccumulator(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
+    const current_byte = contents[i];
+    const w_bit = current_byte & 1;
+    const immediate = bytes_to_u16(&[2]u8{ contents[i + 1], if (w_bit == 0b1) contents[i + 2] else 0b0 });
+    const reg = regDecoder(0b000, w_bit);
+    return Instruction{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .immediate = .{
+        .value = immediate,
+        .kind = .value,
+    } }, .bytes_consumed = 2 + w_bit };
+}
+
+fn getOperandKind(kind: InstructionKind, is_memory: bool, w_bit: u8, is_destination: bool) OperandKind {
+    // For register destinations, immediate source should always be .value
+    if (!is_memory) return .value;
+
+    if (kind == .MOVE) {
+        // For MOV: memory gets .value, immediate gets size
+        return if (is_destination) .value else (if (w_bit == 0b0) .byte else .word);
+    }
+    // For non-MOVE: memory gets size, immediate gets .value
+    return if (is_destination) (if (w_bit == 0b0) .byte else .word) else .value;
 }
 
 fn formatOperand(writer: anytype, operand: Operand) !void {
@@ -229,6 +266,11 @@ fn formatOperand(writer: anytype, operand: Operand) !void {
         },
         .register => |reg| try writer.writeAll(reg),
         .memory => |mem| {
+            switch (mem.kind) {
+                .byte => try writer.print("byte ", .{}),
+                .word => try writer.print("word ", .{}),
+                else => {},
+            }
             try writer.writeByte('[');
             try writer.writeAll(mem.register);
             if (mem.displacement) |disp| {
@@ -291,6 +333,8 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
             try handleRegisterMemoryToFromRegister(contents, i, .ADD)
         else if (current_byte >> 2 == 0b100000)
             try handleImmediateToRegisterMemory(contents, i, .ADD)
+        else if ((current_byte & 0b11111110) == 0b00000100)
+            try handleImmediateToAccumulator(contents, i, .ADD)
         else {
             i += 1;
             std.log.debug("OPCODE: {b}", .{current_byte});
@@ -301,9 +345,7 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
         i += instruction.bytes_consumed;
     }
 
-    const written = fbs.getWritten();
-    std.log.debug("Written content: {s}", .{written});
-    return written;
+    return fbs.getWritten();
 }
 
 test "disassemble" {
@@ -368,6 +410,12 @@ test "disassemble" {
     const bytes_10 = [_]u8{ 0b10000011, 0b11000110, 0b10 };
     const res_10 = try disassemble(&bytes_10, &buffer);
     try std.testing.expectEqualSlices(u8, "add si, 2\n", res_10);
+
+    // ADD immediate to accumulator
+    buffer = undefined;
+    const bytes_11 = [_]u8{ 0b101, 0b11101000, 0b11 };
+    const res_11 = try disassemble(&bytes_11, &buffer);
+    try std.testing.expectEqualSlices(u8, "add ax, 1000\n", res_11);
 }
 
 fn regDecoder(reg: u8, w: u8) []const u8 {

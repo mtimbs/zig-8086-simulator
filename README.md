@@ -20,7 +20,5 @@ I am building this as I am following along with the course by C. Muratori at htt
 
 
 ## TODO
-- [ ] handle dynamically parsing number of bytes (e.g single byte instructions, hi/lo displacement, multiple instructions etc)
-- [ ] change diff to work on the machine code not .asm files (handles comments and signed integers)
-- [ ] handle movs from more_movs.asm
-- [ ] handle challenge_mov.asm
+- [ ] Opcode patterns in 8086 arithmetic (https://www.computerenhance.com/p/opcode-patterns-in-8086-arithmetic)
+- Check the byte/word stuff with immediate to register/memory on MOV. ADD/SUB behave different
