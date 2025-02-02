@@ -22,3 +22,7 @@ I am building this as I am following along with the course by C. Muratori at htt
 ## TODO
 - [ ] Opcode patterns in 8086 arithmetic (https://www.computerenhance.com/p/opcode-patterns-in-8086-arithmetic)
 - Check the byte/word stuff with immediate to register/memory on MOV. ADD/SUB behave different
+ -[x] add
+ -[x] subtract
+ -[ ] compare
+ -[ ] jump not zero

@@ -17,7 +17,7 @@ const Operand = union(enum) {
     },
 };
 
-const InstructionKind = enum { MOVE, ADD, SUBTRACT };
+const InstructionKind = enum { ADD, COMPARE, MOVE, SUBTRACT };
 
 const Instruction = struct {
     kind: InstructionKind,
@@ -291,8 +291,9 @@ fn formatOperand(writer: anytype, operand: Operand) !void {
 
 fn formatInstruction(writer: anytype, instruction: Instruction) !void {
     const instructionKind = switch (instruction.kind) {
-        .MOVE => "mov",
         .ADD => "add",
+        .COMPARE => "cmp",
+        .MOVE => "mov",
         .SUBTRACT => "sub",
     };
     try writer.print("{s} ", .{instructionKind});
@@ -342,6 +343,12 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
             try handleImmediateToRegisterMemory(contents, i, .SUBTRACT)
         else if ((current_byte & 0b11111110) == 0b00101100)
             try handleImmediateToAccumulator(contents, i, .SUBTRACT)
+        else if (current_byte >> 2 == 0b001110)
+            try handleRegisterMemoryToFromRegister(contents, i, .COMPARE)
+        else if (current_byte >> 2 == 0b100000 and (contents[i + 1] >> 3) & 0b111 == 0b111)
+            try handleImmediateToRegisterMemory(contents, i, .COMPARE)
+        else if ((current_byte & 0b11111110) == 0b00111100)
+            try handleImmediateToAccumulator(contents, i, .COMPARE)
         else {
             i += 1;
             std.log.debug("OPCODE: {b}", .{current_byte});
