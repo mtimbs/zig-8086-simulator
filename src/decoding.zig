@@ -18,7 +18,28 @@ const Operand = union(enum) {
 };
 
 const BasicInstructionKind = enum { ADD, COMPARE, MOVE, SUBTRACT };
-const JumpInstructionKind = enum { JUMP_NOT_ZERO, JUMP_NOT_LESS_THAN, JUMP_NOT_LESS_THAN_OR_EQUAL, JUMP_ON_BELOW, JUMP_ON_BELOW_OR_EQUAL, JUMP_ON_LESS_OR_EQUAL, JUMP_ON_LESS, JUMP_ON_NOT_BELOW, JUMP_ON_NOT_BELOW_OR_EQUAL, JUMP_ON_NOT_OVERFLOW, JUMP_ON_NOT_PAR, JUMP_ON_NOT_SIGN, JUMP_ON_OVERFLOW, JUMP_ON_PARITY, JUMP_ON_SIGN, JUMP_ON_ZERO };
+const JumpInstructionKind = enum {
+    JUMP_NOT_ZERO,
+    JUMP_NOT_LESS_THAN,
+    JUMP_NOT_LESS_THAN_OR_EQUAL,
+    JUMP_ON_BELOW,
+    JUMP_ON_BELOW_OR_EQUAL,
+    JUMP_ON_CX_ZERO,
+    JUMP_ON_LESS_OR_EQUAL,
+    JUMP_ON_LESS,
+    JUMP_ON_NOT_BELOW,
+    JUMP_ON_NOT_BELOW_OR_EQUAL,
+    JUMP_ON_NOT_OVERFLOW,
+    JUMP_ON_NOT_PAR,
+    JUMP_ON_NOT_SIGN,
+    JUMP_ON_OVERFLOW,
+    JUMP_ON_PARITY,
+    JUMP_ON_SIGN,
+    JUMP_ON_ZERO,
+    LOOP_CX_TIMES,
+    LOOP_WHILE_NOT_ZERO,
+    LOOP_WHILE_ZERO,
+};
 
 const BasicInstruction = struct {
     kind: BasicInstructionKind,
@@ -333,6 +354,7 @@ fn formatInstruction(writer: anytype, instruction: Instruction) !void {
                 .JUMP_NOT_LESS_THAN_OR_EQUAL => try writer.print("jnle", .{}),
                 .JUMP_ON_BELOW => try writer.print("jb", .{}),
                 .JUMP_ON_BELOW_OR_EQUAL => try writer.print("jbe", .{}),
+                .JUMP_ON_CX_ZERO => try writer.print("jcxz", .{}),
                 .JUMP_ON_LESS => try writer.print("jl", .{}),
                 .JUMP_ON_LESS_OR_EQUAL => try writer.print("jle", .{}),
                 .JUMP_ON_NOT_BELOW => try writer.print("jnb", .{}),
@@ -344,6 +366,9 @@ fn formatInstruction(writer: anytype, instruction: Instruction) !void {
                 .JUMP_ON_PARITY => try writer.print("jp", .{}),
                 .JUMP_ON_SIGN => try writer.print("js", .{}),
                 .JUMP_ON_ZERO => try writer.print("jz", .{}),
+                .LOOP_CX_TIMES => try writer.print("loop", .{}),
+                .LOOP_WHILE_NOT_ZERO => try writer.print("loopnz", .{}),
+                .LOOP_WHILE_ZERO => try writer.print("loopz", .{}),
             }
             if (jump.relative_bytes < 0) {
                 try writer.print(" ${d}\n", .{jump.relative_bytes});
@@ -410,6 +435,8 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
             try handleJump(contents, i, .JUMP_ON_BELOW)
         else if (current_byte == 0b01110110)
             try handleJump(contents, i, .JUMP_ON_BELOW_OR_EQUAL)
+        else if (current_byte == 0b11100011)
+            try handleJump(contents, i, .JUMP_ON_CX_ZERO)
         else if (current_byte == 0b01111100)
             try handleJump(contents, i, .JUMP_ON_LESS)
         else if (current_byte == 0b01111110)
@@ -432,6 +459,12 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
             try handleJump(contents, i, .JUMP_ON_SIGN)
         else if (current_byte == 0b01110100)
             try handleJump(contents, i, .JUMP_ON_ZERO)
+        else if (current_byte == 0b11100010)
+            try handleJump(contents, i, .LOOP_CX_TIMES)
+        else if (current_byte == 0b11100000)
+            try handleJump(contents, i, .LOOP_WHILE_NOT_ZERO)
+        else if (current_byte == 0b11100001)
+            try handleJump(contents, i, .LOOP_WHILE_ZERO)
         else {
             i += 1;
             std.log.debug("OPCODE: {b}", .{current_byte});
