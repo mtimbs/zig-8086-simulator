@@ -17,16 +17,26 @@ const Operand = union(enum) {
     },
 };
 
-const InstructionKind = enum { ADD, COMPARE, MOVE, SUBTRACT };
+const BasicInstructionKind = enum { ADD, COMPARE, MOVE, SUBTRACT };
+const JumpInstructionKind = enum { JUMP_NOT_ZERO };
 
-const Instruction = struct {
-    kind: InstructionKind,
+const BasicInstruction = struct {
+    kind: BasicInstructionKind,
     destination: Operand,
     source: Operand,
     bytes_consumed: u8,
 };
+const JumpInstruction = struct {
+    kind: JumpInstructionKind,
+    relative_bytes: i8,
+    bytes_consumed: u8,
+};
+const Instruction = union(enum) {
+    basic: BasicInstruction,
+    jump: JumpInstruction,
+};
 
-fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
+fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const next_byte = contents[i + 1];
     const d_bit = current_byte >> 1 & 1;
@@ -84,15 +94,15 @@ fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: Instruc
             .displacement = displacement,
         } };
 
-    return Instruction{
+    return Instruction{ .basic = .{
         .kind = kind,
         .destination = if (d_bit == 0b1) reg_operand else rm_operand,
         .source = if (d_bit == 0b1) rm_operand else reg_operand,
         .bytes_consumed = bytes_consumed,
-    };
+    } };
 }
 
-fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
+fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const next_byte = contents[i + 1];
     const w_bit = current_byte & 1;
@@ -168,7 +178,7 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: Instructio
             .displacement = displacement,
         } };
 
-    return Instruction{
+    return Instruction{ .basic = .{
         .kind = kind,
         .destination = rm_operand,
         .source = Operand{ .immediate = .{
@@ -176,10 +186,10 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: Instructio
             .kind = getOperandKind(kind, is_memory, w_bit, false),
         } },
         .bytes_consumed = bytes_consumed,
-    };
+    } };
 }
 
-fn handleImmediateToRegister(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
+fn handleImmediateToRegister(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const data_one = contents[i + 1];
     const w_bit = (current_byte >> 3) & 1;
@@ -199,10 +209,12 @@ fn handleImmediateToRegister(contents: []const u8, i: u8, kind: InstructionKind)
 
     // If the w_bit is 0 we had a 1 byte displacement so we skip next byte (bytes consumed = 2).
     // If the w_bit is 1 we had a 2 byte displacement so we increment by two (bytes_consumed = 3).
-    return Instruction{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .immediate = .{ .value = immediate, .kind = .value } }, .bytes_consumed = if (w_bit == 0b1) 3 else 2 };
+    return Instruction{
+        .basic = .{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .immediate = .{ .value = immediate, .kind = .value } }, .bytes_consumed = if (w_bit == 0b1) 3 else 2 },
+    };
 }
 
-fn handleMemoryToAccumulator(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
+fn handleMemoryToAccumulator(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const w_bit = current_byte & 1;
     const addr_lo = contents[i + 1];
@@ -211,39 +223,48 @@ fn handleMemoryToAccumulator(contents: []const u8, i: u8, kind: InstructionKind)
     const displacement = @as(i16, @bitCast(bytes_to_u16(&[2]u8{ addr_lo, addr_hi })));
     const reg = regDecoder(0b000, w_bit);
 
-    return Instruction{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .memory = .{
+    return Instruction{ .basic = .{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .memory = .{
         .kind = .value,
         .register = "",
         .displacement = displacement,
-    } }, .bytes_consumed = 3 };
+    } }, .bytes_consumed = 3 } };
 }
 
-fn handleAccumulatorToMemory(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
+fn handleAccumulatorToMemory(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const w_bit = current_byte & 1;
     const addr_lo = contents[i + 1];
     const addr_hi = contents[i + 2];
     const displacement = @as(i16, @bitCast(bytes_to_u16(&[2]u8{ addr_lo, addr_hi })));
     const reg = regDecoder(0b000, w_bit);
-    return Instruction{ .kind = kind, .destination = Operand{ .memory = .{
+
+    return Instruction{ .basic = .{ .kind = kind, .destination = Operand{ .memory = .{
         .kind = if (w_bit == 0b0) .byte else .word,
         .register = "",
         .displacement = displacement,
-    } }, .source = Operand{ .register = reg }, .bytes_consumed = 3 };
+    } }, .source = Operand{ .register = reg }, .bytes_consumed = 3 } };
 }
 
-fn handleImmediateToAccumulator(contents: []const u8, i: u8, kind: InstructionKind) !Instruction {
+fn handleImmediateToAccumulator(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const w_bit = current_byte & 1;
     const immediate = bytes_to_u16(&[2]u8{ contents[i + 1], if (w_bit == 0b1) contents[i + 2] else 0b0 });
     const reg = regDecoder(0b000, w_bit);
-    return Instruction{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .immediate = .{
+
+    return Instruction{ .basic = .{ .kind = kind, .destination = Operand{ .register = reg }, .source = Operand{ .immediate = .{
         .value = immediate,
         .kind = .value,
-    } }, .bytes_consumed = 2 + w_bit };
+    } }, .bytes_consumed = 2 + w_bit } };
 }
 
-fn getOperandKind(kind: InstructionKind, is_memory: bool, w_bit: u8, is_destination: bool) OperandKind {
+fn handleJump(contents: []const u8, i: u8, kind: JumpInstructionKind) !Instruction {
+    // jumps are relative from end of instructions. So we add 2 to the actual value as we need two instructionst encode the jump
+    return Instruction{
+        .jump = .{ .kind = kind, .relative_bytes = @bitCast(contents[i + 1] + 0b00000010), .bytes_consumed = 2 },
+    };
+}
+
+fn getOperandKind(kind: BasicInstructionKind, is_memory: bool, w_bit: u8, is_destination: bool) OperandKind {
     // For register destinations, immediate source should always be .value
     if (!is_memory) return .value;
 
@@ -290,17 +311,32 @@ fn formatOperand(writer: anytype, operand: Operand) !void {
 }
 
 fn formatInstruction(writer: anytype, instruction: Instruction) !void {
-    const instructionKind = switch (instruction.kind) {
-        .ADD => "add",
-        .COMPARE => "cmp",
-        .MOVE => "mov",
-        .SUBTRACT => "sub",
-    };
-    try writer.print("{s} ", .{instructionKind});
-    try formatOperand(writer, instruction.destination);
-    try writer.writeAll(", ");
-    try formatOperand(writer, instruction.source);
-    try writer.writeByte('\n');
+    switch (instruction) {
+        .basic => |basic| {
+            const instructionKind = switch (basic.kind) {
+                .ADD => "add",
+                .COMPARE => "cmp",
+                .MOVE => "mov",
+                .SUBTRACT => "sub",
+            };
+            try writer.print("{s} ", .{instructionKind});
+            try formatOperand(writer, basic.destination);
+            try writer.writeAll(", ");
+            try formatOperand(writer, basic.source);
+            try writer.writeByte('\n');
+        },
+        .jump => |jump| {
+            switch (jump.kind) {
+                .JUMP_NOT_ZERO => {
+                    if (jump.relative_bytes < 0) {
+                        try writer.print("jnz ${d}\n", .{jump.relative_bytes});
+                    } else {
+                        try writer.print("jnz $+{d}\n", .{jump.relative_bytes});
+                    }
+                },
+            }
+        },
+    }
 }
 
 // Arguably I could take a writer as an argument here. This would allow me to write directly to
@@ -349,6 +385,8 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
             try handleImmediateToRegisterMemory(contents, i, .COMPARE)
         else if ((current_byte & 0b11111110) == 0b00111100)
             try handleImmediateToAccumulator(contents, i, .COMPARE)
+        else if (current_byte == 0b01110101)
+            try handleJump(contents, i, .JUMP_NOT_ZERO)
         else {
             i += 1;
             std.log.debug("OPCODE: {b}", .{current_byte});
@@ -356,7 +394,10 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
         };
 
         try formatInstruction(writer, instruction);
-        i += instruction.bytes_consumed;
+        i += switch (instruction) {
+            .basic => |basic| basic.bytes_consumed,
+            .jump => |jump| jump.bytes_consumed,
+        };
     }
 
     return fbs.getWritten();
