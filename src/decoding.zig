@@ -18,7 +18,7 @@ const Operand = union(enum) {
 };
 
 const BasicInstructionKind = enum { ADD, COMPARE, MOVE, SUBTRACT };
-const JumpInstructionKind = enum { JUMP_NOT_ZERO };
+const JumpInstructionKind = enum { JUMP_NOT_ZERO, JUMP_NOT_LESS_THAN, JUMP_NOT_LESS_THAN_OR_EQUAL, JUMP_ON_BELOW, JUMP_ON_BELOW_OR_EQUAL, JUMP_ON_LESS_OR_EQUAL, JUMP_ON_LESS, JUMP_ON_NOT_BELOW, JUMP_ON_NOT_BELOW_OR_EQUAL, JUMP_ON_NOT_OVERFLOW, JUMP_ON_NOT_PAR, JUMP_ON_NOT_SIGN, JUMP_ON_OVERFLOW, JUMP_ON_PARITY, JUMP_ON_SIGN, JUMP_ON_ZERO };
 
 const BasicInstruction = struct {
     kind: BasicInstructionKind,
@@ -259,8 +259,9 @@ fn handleImmediateToAccumulator(contents: []const u8, i: u8, kind: BasicInstruct
 
 fn handleJump(contents: []const u8, i: u8, kind: JumpInstructionKind) !Instruction {
     // jumps are relative from end of instructions. So we add 2 to the actual value as we need two instructionst encode the jump
+    const byte_from_contents: i8 = @bitCast(contents[i + 1]);
     return Instruction{
-        .jump = .{ .kind = kind, .relative_bytes = @bitCast(contents[i + 1] + 0b00000010), .bytes_consumed = 2 },
+        .jump = .{ .kind = kind, .relative_bytes = byte_from_contents + 2, .bytes_consumed = 2 },
     };
 }
 
@@ -327,13 +328,27 @@ fn formatInstruction(writer: anytype, instruction: Instruction) !void {
         },
         .jump => |jump| {
             switch (jump.kind) {
-                .JUMP_NOT_ZERO => {
-                    if (jump.relative_bytes < 0) {
-                        try writer.print("jnz ${d}\n", .{jump.relative_bytes});
-                    } else {
-                        try writer.print("jnz $+{d}\n", .{jump.relative_bytes});
-                    }
-                },
+                .JUMP_NOT_ZERO => try writer.print("jnz", .{}),
+                .JUMP_NOT_LESS_THAN => try writer.print("jnl", .{}),
+                .JUMP_NOT_LESS_THAN_OR_EQUAL => try writer.print("jnle", .{}),
+                .JUMP_ON_BELOW => try writer.print("jb", .{}),
+                .JUMP_ON_BELOW_OR_EQUAL => try writer.print("jbe", .{}),
+                .JUMP_ON_LESS => try writer.print("jl", .{}),
+                .JUMP_ON_LESS_OR_EQUAL => try writer.print("jle", .{}),
+                .JUMP_ON_NOT_BELOW => try writer.print("jnb", .{}),
+                .JUMP_ON_NOT_BELOW_OR_EQUAL => try writer.print("ja", .{}),
+                .JUMP_ON_NOT_OVERFLOW => try writer.print("jno", .{}),
+                .JUMP_ON_NOT_PAR => try writer.print("jnp", .{}),
+                .JUMP_ON_NOT_SIGN => try writer.print("jns", .{}),
+                .JUMP_ON_OVERFLOW => try writer.print("jo", .{}),
+                .JUMP_ON_PARITY => try writer.print("jp", .{}),
+                .JUMP_ON_SIGN => try writer.print("js", .{}),
+                .JUMP_ON_ZERO => try writer.print("jz", .{}),
+            }
+            if (jump.relative_bytes < 0) {
+                try writer.print(" ${d}\n", .{jump.relative_bytes});
+            } else {
+                try writer.print(" $+{d}\n", .{jump.relative_bytes});
             }
         },
     }
@@ -387,6 +402,36 @@ pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
             try handleImmediateToAccumulator(contents, i, .COMPARE)
         else if (current_byte == 0b01110101)
             try handleJump(contents, i, .JUMP_NOT_ZERO)
+        else if (current_byte == 0b01111101)
+            try handleJump(contents, i, .JUMP_NOT_LESS_THAN)
+        else if (current_byte == 0b01111111)
+            try handleJump(contents, i, .JUMP_NOT_LESS_THAN_OR_EQUAL)
+        else if (current_byte == 0b01110010)
+            try handleJump(contents, i, .JUMP_ON_BELOW)
+        else if (current_byte == 0b01110110)
+            try handleJump(contents, i, .JUMP_ON_BELOW_OR_EQUAL)
+        else if (current_byte == 0b01111100)
+            try handleJump(contents, i, .JUMP_ON_LESS)
+        else if (current_byte == 0b01111110)
+            try handleJump(contents, i, .JUMP_ON_LESS_OR_EQUAL)
+        else if (current_byte == 0b01110011)
+            try handleJump(contents, i, .JUMP_ON_NOT_BELOW)
+        else if (current_byte == 0b01110111)
+            try handleJump(contents, i, .JUMP_ON_NOT_BELOW_OR_EQUAL)
+        else if (current_byte == 0b01110001)
+            try handleJump(contents, i, .JUMP_ON_NOT_OVERFLOW)
+        else if (current_byte == 0b01111011)
+            try handleJump(contents, i, .JUMP_ON_NOT_PAR)
+        else if (current_byte == 0b01111001)
+            try handleJump(contents, i, .JUMP_ON_NOT_SIGN)
+        else if (current_byte == 0b01110000)
+            try handleJump(contents, i, .JUMP_ON_OVERFLOW)
+        else if (current_byte == 0b01111010)
+            try handleJump(contents, i, .JUMP_ON_PARITY)
+        else if (current_byte == 0b01111000)
+            try handleJump(contents, i, .JUMP_ON_SIGN)
+        else if (current_byte == 0b01110100)
+            try handleJump(contents, i, .JUMP_ON_ZERO)
         else {
             i += 1;
             std.log.debug("OPCODE: {b}", .{current_byte});
