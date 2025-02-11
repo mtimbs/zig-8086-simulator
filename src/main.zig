@@ -1,18 +1,20 @@
 const std = @import("std");
-const decoder = @import("decoding.zig");
 const parser = @import("parser.zig");
+const cpu = @import("cpu.zig");
+const gui = @import("gui.zig");
 
 pub fn main() !void {
     var fixed_buffer: [1024000]u8 = undefined;
 
-    const args = try parser.parseArgs();
+    const args = parser.parseArgs() catch |err| return err;
     std.log.debug("Parsed Args: \ninput: {s}\noutput: {s}\n", .{ args.input_file, args.output_file });
 
-    const file_contents = try parser.readFile(fixed_buffer[0..512000], args.input_file);
-
+    const file_contents = parser.readFile(fixed_buffer[0..512000], args.input_file) catch |err| return err;
     std.log.debug("File contents:\n{b}\n", .{file_contents});
-    const disasembled_asm = try decoder.disassemble(file_contents, fixed_buffer[512000..]);
 
-    std.log.debug("Output ASM:\n{s}\n", .{disasembled_asm});
-    try parser.writeAsmToFile(args.output_file, disasembled_asm);
+    var cpu_state = cpu.CpuState.init(file_contents) catch |err| return err;
+
+    // Initialize and run the GUI using Clay.
+    var app = gui.App.init(&cpu_state) catch |err| return err;
+    app.run();
 }

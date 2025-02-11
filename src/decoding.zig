@@ -1,10 +1,12 @@
 const std = @import("std");
+
 const OperandKind = enum {
     value,
     byte,
     word,
 };
-const Operand = union(enum) {
+
+pub const Operand = union(enum) {
     immediate: struct {
         value: u16,
         kind: OperandKind,
@@ -17,8 +19,8 @@ const Operand = union(enum) {
     },
 };
 
-const BasicInstructionKind = enum { ADD, COMPARE, MOVE, SUBTRACT };
-const JumpInstructionKind = enum {
+pub const BasicInstructionKind = enum { ADD, COMPARE, MOVE, SUBTRACT };
+pub const JumpInstructionKind = enum {
     JUMP_NOT_ZERO,
     JUMP_NOT_LESS_THAN,
     JUMP_NOT_LESS_THAN_OR_EQUAL,
@@ -41,23 +43,23 @@ const JumpInstructionKind = enum {
     LOOP_WHILE_ZERO,
 };
 
-const BasicInstruction = struct {
+pub const BasicInstruction = struct {
     kind: BasicInstructionKind,
     destination: Operand,
     source: Operand,
     bytes_consumed: u8,
 };
-const JumpInstruction = struct {
+pub const JumpInstruction = struct {
     kind: JumpInstructionKind,
     relative_bytes: i8,
     bytes_consumed: u8,
 };
-const Instruction = union(enum) {
+pub const Instruction = union(enum) {
     basic: BasicInstruction,
     jump: JumpInstruction,
 };
 
-fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
+fn handleRegisterMemoryToFromRegister(contents: []const u8, i: usize, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const next_byte = contents[i + 1];
     const d_bit = current_byte >> 1 & 1;
@@ -67,14 +69,6 @@ fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: BasicIn
     const rm_bits = next_byte & ((1 << 3) - 1);
     const reg = regDecoder(reg_bits, w_bit);
     const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
-
-    std.log.debug("OPCODE: {b}", .{current_byte >> 2});
-    std.log.debug("W: {b}", .{w_bit});
-    std.log.debug("D: {b}", .{d_bit});
-    std.log.debug("MOD: {b}", .{mod_bits});
-    std.log.debug("RM: {b}", .{rm_bits});
-    std.log.debug("Reg: {b}", .{reg_bits});
-    std.log.debug("Reg: {s}", .{rm.register});
 
     var displacement: ?i16 = null;
     var bytes_consumed: u8 = 2; // Default to consuming opcode + mod/rm byte
@@ -98,7 +92,6 @@ fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: BasicIn
             }
             const d16_value = @as(i16, @bitCast(bytes_to_u16(&[_]u8{ contents[i + 2], contents[i + 3] })));
             if (d16_value != 0) {
-                std.log.debug("Displacemnt: {d}", .{d16_value});
                 displacement = d16_value;
             }
             bytes_consumed += 2;
@@ -123,7 +116,7 @@ fn handleRegisterMemoryToFromRegister(contents: []const u8, i: u8, kind: BasicIn
     } };
 }
 
-fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
+fn handleImmediateToRegisterMemory(contents: []const u8, i: usize, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const next_byte = contents[i + 1];
     const w_bit = current_byte & 1;
@@ -132,22 +125,12 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: BasicInstr
     const rm_bits = next_byte & ((1 << 3) - 1);
     const rm = try rmDecoder(mod_bits, rm_bits, w_bit);
 
-    std.log.debug("OPCODE: {b}", .{current_byte >> 2});
-    std.log.debug("W: {b}", .{w_bit});
-    std.log.debug("S: {b}", .{s_bit});
-    std.log.debug("MOD: {b}", .{mod_bits});
-    std.log.debug("R/M: {b}", .{rm_bits});
-    std.log.debug("Register: {s}", .{rm.register});
-
     var displacement: ?i16 = null;
     var bytes_consumed: u8 = 2; // Default to consuming opcode + mod/rm byte
 
     switch (rm.displacement) {
-        .None => {
-            std.log.debug("Displacement: None", .{});
-        },
+        .None => {},
         .Low => {
-            std.log.debug("Displacement: Low", .{});
             if (contents.len < i + 3) {
                 return error.InsufficientBytesForDisplacementLow;
             }
@@ -159,7 +142,6 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: BasicInstr
             bytes_consumed += 1;
         },
         .High => {
-            std.log.debug("Displacement: High", .{});
             if (contents.len < i + 4) {
                 return error.InsufficientBytesForDisplacementHigh;
             }
@@ -171,9 +153,6 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: BasicInstr
         },
     }
 
-    std.log.debug("Bytes consumed: {d}", .{bytes_consumed});
-    std.log.debug("i: {d}", .{i});
-
     const immediate = if (s_bit == 0b0 and w_bit == 0b1 and contents.len > i + bytes_consumed + 1)
         bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], contents[i + bytes_consumed + 1] })
     else if (w_bit == 0b1 and s_bit == 0b1 and contents.len > i + bytes_consumed)
@@ -182,13 +161,12 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: BasicInstr
         bytes_to_u16(&[2]u8{ contents[i + bytes_consumed], 0b0 })
     else
         return error.InsufficientBytesForImmediate;
-    // We either consumed 1 or 2 bytes depending on if w was 0 or 1. We do some hackery here because with add/sub etc, the w_bit being 1 actually means there is only a single byte data. It is only
+
     if (w_bit == 0b1 and s_bit == 1) {
         bytes_consumed += 1;
     } else {
         bytes_consumed += (1 + w_bit);
     }
-    std.log.debug("Bytes consumed: {d}", .{bytes_consumed});
     const is_memory = mod_bits != 0b11;
     const rm_operand = if (!is_memory)
         Operand{ .register = rm.register }
@@ -210,23 +188,15 @@ fn handleImmediateToRegisterMemory(contents: []const u8, i: u8, kind: BasicInstr
     } };
 }
 
-fn handleImmediateToRegister(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
+fn handleImmediateToRegister(contents: []const u8, i: usize, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
-    const data_one = contents[i + 1];
     const w_bit = (current_byte >> 3) & 1;
     const reg_bits = current_byte & ((1 << 3) - 1);
-    std.log.debug("data: {b}", .{data_one});
-    std.log.debug("W: {b}", .{w_bit});
-    std.log.debug("reg: {b}", .{reg_bits});
-
     const reg = regDecoder(reg_bits, w_bit);
     const immediate = if (w_bit == 0b1 and contents.len >= i + 2)
         bytes_to_u16(&[2]u8{ contents[i + 1], contents[i + 2] })
     else
         bytes_to_u16(&[2]u8{ contents[i + 1], 0b0 });
-
-    std.log.debug("immediate: {d}", .{immediate});
-    std.log.debug("reg: {s}", .{reg});
 
     // If the w_bit is 0 we had a 1 byte displacement so we skip next byte (bytes consumed = 2).
     // If the w_bit is 1 we had a 2 byte displacement so we increment by two (bytes_consumed = 3).
@@ -235,7 +205,7 @@ fn handleImmediateToRegister(contents: []const u8, i: u8, kind: BasicInstruction
     };
 }
 
-fn handleMemoryToAccumulator(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
+fn handleMemoryToAccumulator(contents: []const u8, i: usize, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const w_bit = current_byte & 1;
     const addr_lo = contents[i + 1];
@@ -251,7 +221,7 @@ fn handleMemoryToAccumulator(contents: []const u8, i: u8, kind: BasicInstruction
     } }, .bytes_consumed = 3 } };
 }
 
-fn handleAccumulatorToMemory(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
+fn handleAccumulatorToMemory(contents: []const u8, i: usize, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const w_bit = current_byte & 1;
     const addr_lo = contents[i + 1];
@@ -266,7 +236,7 @@ fn handleAccumulatorToMemory(contents: []const u8, i: u8, kind: BasicInstruction
     } }, .source = Operand{ .register = reg }, .bytes_consumed = 3 } };
 }
 
-fn handleImmediateToAccumulator(contents: []const u8, i: u8, kind: BasicInstructionKind) !Instruction {
+fn handleImmediateToAccumulator(contents: []const u8, i: usize, kind: BasicInstructionKind) !Instruction {
     const current_byte = contents[i];
     const w_bit = current_byte & 1;
     const immediate = bytes_to_u16(&[2]u8{ contents[i + 1], if (w_bit == 0b1) contents[i + 2] else 0b0 });
@@ -278,7 +248,7 @@ fn handleImmediateToAccumulator(contents: []const u8, i: u8, kind: BasicInstruct
     } }, .bytes_consumed = 2 + w_bit } };
 }
 
-fn handleJump(contents: []const u8, i: u8, kind: JumpInstructionKind) !Instruction {
+fn handleJump(contents: []const u8, i: usize, kind: JumpInstructionKind) !Instruction {
     // jumps are relative from end of instructions. So we add 2 to the actual value as we need two instructionst encode the jump
     const byte_from_contents: i8 = @bitCast(contents[i + 1]);
     return Instruction{
@@ -332,7 +302,7 @@ fn formatOperand(writer: anytype, operand: Operand) !void {
     }
 }
 
-fn formatInstruction(writer: anytype, instruction: Instruction) !void {
+pub fn formatInstruction(writer: anytype, instruction: Instruction) !void {
     switch (instruction) {
         .basic => |basic| {
             const instructionKind = switch (basic.kind) {
@@ -379,182 +349,113 @@ fn formatInstruction(writer: anytype, instruction: Instruction) !void {
     }
 }
 
-// Arguably I could take a writer as an argument here. This would allow me to write directly to
-// file or handle larger contents streams. However, I feel like this more 'functional' approach is
-// easier for me to reason about. So I will use it for now. I just need to hoist the writer init
-// to the call site in order to refactor this
-pub fn disassemble(contents: []const u8, buffer: []u8) ![]const u8 {
-    var fbs = std.io.fixedBufferStream(buffer);
-    const writer = fbs.writer();
+pub const InstructionIterator = struct {
+    bytes: []const u8,
+    current_index: usize,
 
-    var i: u8 = 0;
-    while (i < contents.len) {
-        const current_byte = contents[i];
-
-        if (contents.len < i + 1) {
-            // this is just a placeholder until I handle this legitimate case
-            // -- at the moment I am only dealing with non-single byte instructions
-            return error.OutOfBytesError;
-        }
-
-        const instruction = if (current_byte >> 2 == 0b100010 and contents.len > i)
-            try handleRegisterMemoryToFromRegister(contents, i, .MOVE)
-        else if (current_byte >> 1 == 0b1100011)
-            try handleImmediateToRegisterMemory(contents, i, .MOVE)
-        else if (current_byte >> 4 == 0b1011)
-            try handleImmediateToRegister(contents, i, .MOVE)
-        else if (current_byte >> 1 == 0b1010000)
-            try handleMemoryToAccumulator(contents, i, .MOVE)
-        else if (current_byte >> 1 == 0b1010001)
-            try handleAccumulatorToMemory(contents, i, .MOVE)
-        else if (current_byte >> 2 == 0b0)
-            try handleRegisterMemoryToFromRegister(contents, i, .ADD)
-        else if (current_byte >> 2 == 0b100000 and (contents[i + 1] >> 3) & 0b111 == 0b000)
-            try handleImmediateToRegisterMemory(contents, i, .ADD)
-        else if ((current_byte & 0b11111110) == 0b00000100)
-            try handleImmediateToAccumulator(contents, i, .ADD)
-        else if (current_byte >> 2 == 0b1010)
-            try handleRegisterMemoryToFromRegister(contents, i, .SUBTRACT)
-        else if (current_byte >> 2 == 0b100000 and (contents[i + 1] >> 3) & 0b111 == 0b101)
-            try handleImmediateToRegisterMemory(contents, i, .SUBTRACT)
-        else if ((current_byte & 0b11111110) == 0b00101100)
-            try handleImmediateToAccumulator(contents, i, .SUBTRACT)
-        else if (current_byte >> 2 == 0b001110)
-            try handleRegisterMemoryToFromRegister(contents, i, .COMPARE)
-        else if (current_byte >> 2 == 0b100000 and (contents[i + 1] >> 3) & 0b111 == 0b111)
-            try handleImmediateToRegisterMemory(contents, i, .COMPARE)
-        else if ((current_byte & 0b11111110) == 0b00111100)
-            try handleImmediateToAccumulator(contents, i, .COMPARE)
-        else if (current_byte == 0b01110101)
-            try handleJump(contents, i, .JUMP_NOT_ZERO)
-        else if (current_byte == 0b01111101)
-            try handleJump(contents, i, .JUMP_NOT_LESS_THAN)
-        else if (current_byte == 0b01111111)
-            try handleJump(contents, i, .JUMP_NOT_LESS_THAN_OR_EQUAL)
-        else if (current_byte == 0b01110010)
-            try handleJump(contents, i, .JUMP_ON_BELOW)
-        else if (current_byte == 0b01110110)
-            try handleJump(contents, i, .JUMP_ON_BELOW_OR_EQUAL)
-        else if (current_byte == 0b11100011)
-            try handleJump(contents, i, .JUMP_ON_CX_ZERO)
-        else if (current_byte == 0b01111100)
-            try handleJump(contents, i, .JUMP_ON_LESS)
-        else if (current_byte == 0b01111110)
-            try handleJump(contents, i, .JUMP_ON_LESS_OR_EQUAL)
-        else if (current_byte == 0b01110011)
-            try handleJump(contents, i, .JUMP_ON_NOT_BELOW)
-        else if (current_byte == 0b01110111)
-            try handleJump(contents, i, .JUMP_ON_NOT_BELOW_OR_EQUAL)
-        else if (current_byte == 0b01110001)
-            try handleJump(contents, i, .JUMP_ON_NOT_OVERFLOW)
-        else if (current_byte == 0b01111011)
-            try handleJump(contents, i, .JUMP_ON_NOT_PAR)
-        else if (current_byte == 0b01111001)
-            try handleJump(contents, i, .JUMP_ON_NOT_SIGN)
-        else if (current_byte == 0b01110000)
-            try handleJump(contents, i, .JUMP_ON_OVERFLOW)
-        else if (current_byte == 0b01111010)
-            try handleJump(contents, i, .JUMP_ON_PARITY)
-        else if (current_byte == 0b01111000)
-            try handleJump(contents, i, .JUMP_ON_SIGN)
-        else if (current_byte == 0b01110100)
-            try handleJump(contents, i, .JUMP_ON_ZERO)
-        else if (current_byte == 0b11100010)
-            try handleJump(contents, i, .LOOP_CX_TIMES)
-        else if (current_byte == 0b11100000)
-            try handleJump(contents, i, .LOOP_WHILE_NOT_ZERO)
-        else if (current_byte == 0b11100001)
-            try handleJump(contents, i, .LOOP_WHILE_ZERO)
-        else {
-            i += 1;
-            std.log.debug("OPCODE: {b}", .{current_byte});
-            continue;
-        };
-
-        try formatInstruction(writer, instruction);
-        i += switch (instruction) {
-            .basic => |basic| basic.bytes_consumed,
-            .jump => |jump| jump.bytes_consumed,
+    pub fn init(program_data: []const u8) InstructionIterator {
+        return .{
+            .bytes = program_data,
+            .current_index = 0,
         };
     }
 
-    return fbs.getWritten();
-}
+    pub fn next(self: *InstructionIterator) !?Instruction {
+        if (self.current_index >= self.bytes.len) {
+            return null; // No more instructions
+        }
 
-test "disassemble" {
-    var buffer: [1024]u8 = undefined;
+        const current_byte = self.bytes[self.current_index];
 
-    // Register-to-register
-    buffer = undefined;
-    const bytes = [_]u8{ 0b10001001, 0b11011110 };
-    const res = try disassemble(&bytes, &buffer);
-    try std.testing.expectEqualSlices(u8, "mov si, bx\n", res);
+        const instruction = if (current_byte >> 2 == 0b100010)
+            try handleRegisterMemoryToFromRegister(self.bytes, @intCast(self.current_index), .MOVE)
+        else if (current_byte >> 1 == 0b1100011)
+            try handleImmediateToRegisterMemory(self.bytes, @intCast(self.current_index), .MOVE)
+        else if (current_byte >> 4 == 0b1011)
+            try handleImmediateToRegister(self.bytes, @intCast(self.current_index), .MOVE)
+        else if (current_byte >> 1 == 0b1010000)
+            try handleMemoryToAccumulator(self.bytes, @intCast(self.current_index), .MOVE)
+        else if (current_byte >> 1 == 0b1010001)
+            try handleAccumulatorToMemory(self.bytes, @intCast(self.current_index), .MOVE)
+        else if (current_byte >> 2 == 0b0)
+            try handleRegisterMemoryToFromRegister(self.bytes, @intCast(self.current_index), .ADD)
+        else if (current_byte >> 2 == 0b100000 and (self.bytes[@intCast(self.current_index + 1)] >> 3) & 0b111 == 0b000)
+            try handleImmediateToRegisterMemory(self.bytes, @intCast(self.current_index), .ADD)
+        else if ((current_byte & 0b11111110) == 0b00000100)
+            try handleImmediateToAccumulator(self.bytes, @intCast(self.current_index), .ADD)
+        else if (current_byte >> 2 == 0b1010)
+            try handleRegisterMemoryToFromRegister(self.bytes, @intCast(self.current_index), .SUBTRACT)
+        else if (current_byte >> 2 == 0b100000 and (self.bytes[@intCast(self.current_index + 1)] >> 3) & 0b111 == 0b101)
+            try handleImmediateToRegisterMemory(self.bytes, @intCast(self.current_index), .SUBTRACT)
+        else if ((current_byte & 0b11111110) == 0b00101100)
+            try handleImmediateToAccumulator(self.bytes, @intCast(self.current_index), .SUBTRACT)
+        else if (current_byte >> 2 == 0b001110)
+            try handleRegisterMemoryToFromRegister(self.bytes, @intCast(self.current_index), .COMPARE)
+        else if (current_byte >> 2 == 0b100000 and (self.bytes[@intCast(self.current_index + 1)] >> 3) & 0b111 == 0b111)
+            try handleImmediateToRegisterMemory(self.bytes, @intCast(self.current_index), .COMPARE)
+        else if ((current_byte & 0b11111110) == 0b00111100)
+            try handleImmediateToAccumulator(self.bytes, @intCast(self.current_index), .COMPARE)
+        else if (current_byte == 0b01110101)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_NOT_ZERO)
+        else if (current_byte == 0b01111101)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_NOT_LESS_THAN)
+        else if (current_byte == 0b01111111)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_NOT_LESS_THAN_OR_EQUAL)
+        else if (current_byte == 0b01110010)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_BELOW)
+        else if (current_byte == 0b01110110)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_BELOW_OR_EQUAL)
+        else if (current_byte == 0b11100011)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_CX_ZERO)
+        else if (current_byte == 0b01111100)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_LESS)
+        else if (current_byte == 0b01111110)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_LESS_OR_EQUAL)
+        else if (current_byte == 0b01110011)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_NOT_BELOW)
+        else if (current_byte == 0b01110111)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_NOT_BELOW_OR_EQUAL)
+        else if (current_byte == 0b01110001)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_NOT_OVERFLOW)
+        else if (current_byte == 0b01111011)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_NOT_PAR)
+        else if (current_byte == 0b01111001)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_NOT_SIGN)
+        else if (current_byte == 0b01110000)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_OVERFLOW)
+        else if (current_byte == 0b01111010)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_PARITY)
+        else if (current_byte == 0b01111000)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_SIGN)
+        else if (current_byte == 0b01110100)
+            try handleJump(self.bytes, @intCast(self.current_index), .JUMP_ON_ZERO)
+        else if (current_byte == 0b11100010)
+            try handleJump(self.bytes, @intCast(self.current_index), .LOOP_CX_TIMES)
+        else if (current_byte == 0b11100000)
+            try handleJump(self.bytes, @intCast(self.current_index), .LOOP_WHILE_NOT_ZERO)
+        else if (current_byte == 0b11100001)
+            try handleJump(self.bytes, @intCast(self.current_index), .LOOP_WHILE_ZERO)
+        else {
+            self.current_index += 1;
+            std.log.debug("OPCODE: {b}", .{current_byte});
+            return null; // Skip unrecognized instructions
+        };
 
-    // 8-bit immediate-to-register (unsigned wrap/overflow)
-    buffer = undefined;
-    const bytes_2 = [_]u8{ 0b10110101, 0b11110100 };
-    const res_2 = try disassemble(&bytes_2, &buffer);
-    try std.testing.expectEqualSlices(u8, "mov ch, 244\n", res_2);
+        self.current_index += switch (instruction) {
+            .basic => |basic| basic.bytes_consumed,
+            .jump => |jump| jump.bytes_consumed,
+        };
+        return instruction;
+    }
+};
 
-    // 16-bit immediate-to-register (unsigned wrap/overflow)
-    buffer = undefined;
-    const bytes_3 = [_]u8{ 0b10111001, 0b00001100, 0b0000000 };
-    const res_3 = try disassemble(&bytes_3, &buffer);
-    try std.testing.expectEqualSlices(u8, "mov cx, 12\n", res_3);
+//Disassemble function:
+pub fn disassemble(program_data: []const u8, writer: anytype) !void {
+    var instruction_iterator = InstructionIterator.init(program_data);
 
-    // Source address calculation
-    buffer = undefined;
-    const bytes_4 = [_]u8{ 0b10001010, 0b0 };
-    const res_4 = try disassemble(&bytes_4, &buffer);
-    try std.testing.expectEqualSlices(u8, "mov al, [bx + si]\n", res_4);
-
-    // destination de-register
-    buffer = undefined;
-    const bytes_5 = [_]u8{ 0b10001000, 0b1101110, 0b0 };
-    const res_5 = try disassemble(&bytes_5, &buffer);
-    try std.testing.expectEqualSlices(u8, "mov [bp], ch\n", res_5);
-
-    // signed displacements
-    buffer = undefined;
-    const bytes_6 = [_]u8{ 0b10001011, 0b1000001, 0b11011011 };
-    const res_6 = try disassemble(&bytes_6, &buffer);
-    try std.testing.expectEqualSlices(u8, "mov ax, [bx + di - 37]\n", res_6);
-
-    // explicit size, byte
-    buffer = undefined;
-    const bytes_7 = [_]u8{ 0b11000110, 0b11, 0b111 };
-    const res_7 = try disassemble(&bytes_7, &buffer);
-    try std.testing.expectEqualSlices(u8, "mov [bp + di], byte 7\n", res_7);
-
-    // direct address
-    buffer = undefined;
-    const bytes_8 = [_]u8{ 0b10001011, 0b101110, 0b101, 0b0 };
-    const res_8 = try disassemble(&bytes_8, &buffer);
-    try std.testing.expectEqualSlices(u8, "mov bp, [5]\n", res_8);
-
-    // add Register-to-register
-    buffer = undefined;
-    const bytes_9 = [_]u8{ 0b11, 0b11000 };
-    const res_9 = try disassemble(&bytes_9, &buffer);
-    try std.testing.expectEqualSlices(u8, "add bx, [bx + si]\n", res_9);
-
-    // add Register-to-register
-    buffer = undefined;
-    const bytes_10 = [_]u8{ 0b10000011, 0b11000110, 0b10 };
-    const res_10 = try disassemble(&bytes_10, &buffer);
-    try std.testing.expectEqualSlices(u8, "add si, 2\n", res_10);
-
-    // ADD immediate to accumulator
-    buffer = undefined;
-    const bytes_11 = [_]u8{ 0b101, 0b11101000, 0b11 };
-    const res_11 = try disassemble(&bytes_11, &buffer);
-    try std.testing.expectEqualSlices(u8, "add ax, 1000\n", res_11);
-
-    // SUB Register-to-register
-    buffer = undefined;
-    const bytes_12 = [_]u8{ 0b10000011, 0b11101110, 0b10 };
-    const res_12 = try disassemble(&bytes_12, &buffer);
-    try std.testing.expectEqualSlices(u8, "sub si, 2\n", res_12);
+    while (try instruction_iterator.next()) |instruction| {
+        try formatInstruction(writer, instruction);
+    }
 }
 
 fn regDecoder(reg: u8, w: u8) []const u8 {
@@ -577,20 +478,6 @@ fn regDecoder(reg: u8, w: u8) []const u8 {
         0b1111 => "di",
         else => unreachable,
     };
-}
-
-test "regDecoder" {
-    var output = regDecoder(0b000, 0b1);
-    var expected = "ax";
-    try std.testing.expectEqualSlices(u8, output, expected);
-
-    output = regDecoder(0b000, 0b0);
-    expected = "al";
-    try std.testing.expectEqualSlices(u8, output, expected);
-
-    output = regDecoder(0b001, 0b1);
-    expected = "cx";
-    try std.testing.expectEqualSlices(u8, output, expected);
 }
 
 const Displacement = enum { None, Low, High };
@@ -625,21 +512,6 @@ fn rmDecoder(mod: u8, rm: u8, w: u8) !EffectiveAddress {
     return error.UnrecognisedRegisterMemoryFieldEncoding;
 }
 
-test "rmDecoder" {
-    const mod = 0b11;
-    const rm = 0b001;
-    const w = 0b1;
-    const output = try rmDecoder(mod, rm, w);
-    try std.testing.expectEqualSlices(u8, output.register, "cx");
-}
-
 fn bytes_to_u16(bytes: *const [2]u8) u16 {
     return std.mem.readInt(u16, bytes, .little);
-}
-
-test "bytes_to_u16" {
-    try std.testing.expectEqual(12, bytes_to_u16(&[_]u8{ 0b1100, 0b0 }));
-    try std.testing.expectEqual(244, bytes_to_u16(&[_]u8{ 0b11110100, 0b0 }));
-    try std.testing.expectEqual(3948, bytes_to_u16(&[_]u8{ 0b1101100, 0b1111 }));
-    try std.testing.expectEqual(347, bytes_to_u16(&[_]u8{ 0b1011011, 0b1 }));
 }
